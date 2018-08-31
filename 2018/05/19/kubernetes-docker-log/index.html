@@ -1,0 +1,70 @@
+<!DOCTYPE html><html><head><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description"><title>基于Kubernetes容器云日志采集与处理实践 | xigang's home</title><link rel="stylesheet" type="text/css" href="/css/style.css?v=0.0.0"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/normalize/8.0.0/normalize.min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/pure-min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/grids-responsive-min.css"><link rel="stylesheet" href="//cdn.bootcss.com/font-awesome/4.7.0/css/font-awesome.min.css"><script type="text/javascript" src="//cdn.bootcss.com/jquery/3.3.1/jquery.min.js"></script><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png"></head><body><div class="body_container"><div id="header"><div class="site-name"><h1 class="hidden">基于Kubernetes容器云日志采集与处理实践</h1><a id="logo" href="/.">xigang's home</a><p class="description">简单不先于复杂，而是在复杂之后</p></div><div id="nav-menu"><a class="current" href="/."><i class="fa fa-home"> Start</i></a><a href="/archives/"><i class="fa fa-archive"> Archiv</i></a><a href="/about/"><i class="fa fa-user"> Über</i></a><a href="/atom.xml"><i class="fa fa-rss"> RSS</i></a></div></div><div class="pure-g" id="layout"><div class="pure-u-1 pure-u-md-3-4"><div class="content_container"><div class="post"><h1 class="post-title">基于Kubernetes容器云日志采集与处理实践</h1><div class="post-meta">May 19, 2018</div><div class="post-content"><p>大家好，我是来自奇虎360运维开发团队的王希刚。在团队中主要负责容器服务相关的一些开发工作。今天主要跟大家分享一下360容器服务在日志实践方面的一些工作。</p>
+<p>首先简单的介绍下360HULK云平台的基本服务组成。包括LVS负载均衡，容器服务，S3/Ceph存储，消息队列等一系列服务。具体如下图所示：</p>
+<div align="left"><br><img src="http://p9.qhimg.com/t01fba91a560c57128e.png" width="1000" height="400" alt=""><br></div><br>HULK云平台为公司90%以上的业务提供基础服务。其中容器服务就是HULK云平台的一个产品，本次主要和大家分享下容器云在日志收集方面的一些实践。<br><br>先介绍下容器日志收集的一些难点。<br><br>## 日志采集难点<br><br>这里主要从两个方面来讲，第一个是容器本身的特性，第二个是现有采集工具的一些缺陷。<br><br>### 容器本身特点导致的问题<br><br>容器本身的特点就是太多的不确定性，并且在弹性扩缩容的时候，你无法确定你的Pod调度到哪一个具体的计算节点，导致我们无法事先配置好日志收集路径。下面详细的介绍下容器本身的特性所带来的问题。<br><br>1.容器的采集目标多<br><br>容器一般将日志写到标准输出，对于容器的标准输出日志，docker engine本身就提供了一个很好的日志采集能力，但是对于多数应用服务来说，都是直接将日志写到本地数据盘，如果应用服务运行在容器中，如何对容器中运行的应用服务进行日志收集?<br>2.容器的弹性扩缩容特性<br><br>由于我们使用kubernetes来对容器进行编排管理，在进行Pod的伸缩扩容时，我们无法事先给日志采集工具配置好应用服务日志的具体采集路径等配置信息，因此这对容器的日志采集来说也是一个问题。<br><br>### 现有采集工具缺陷<br><br>1.缺乏动态感知配置变化的能力<br><br>传统的日志采集工具都需要在业务部署完成之后，手动的配置好日志采集方式和日志路径等信息，由于它无法感知到容器的生命周期变化及动态漂移，所以没有办法动态的获取应用服务的日志配置信息。<br><br>2.日志采集数据丢失<br><br>这个和容器的特性也有着一定的关系，当Pod异常销毁之后，需要收集的日志文件不会固定存在node磁盘上，只会临时存放,当Pod异常销毁时日志文件也会被删除,采集工具能否将被删除日志文件的内容全部收集走,而不会照成日志文件被删除而收集工具没有收集完日志导致数据丢失的情况。<br><br>3.未明确标记日志源<br><br>由于一个应用可能由多个运行着相同服务实例的Pod构成，那么当我们将所有的应用服务日志收集到后端存储(如Elasticsearch或HDFS等)时，在搜索日志的时候，无法准确的定位到哪一个应用的哪一个Pod实例异常了。这样就很难定位问题。<br><br>针对上面说明的这些在容器中进行日志采集的难点问题，下面介绍下我们是如何解决这些问题的。<br><br>## 解决日志采集难点<br><br><br>### 容器本身特点导致的问题<br><br>对于上面说的容器本身采集目标多，弹性扩缩容的问题，我们自研了一个叫做log-controller的服务。该服务的主要功能如下:<br><br>1. 动态感知kubernetes集群Node和Pod资源的变化,动态生成每个Node节点需要收集日志的配置信息。<br>2. 定期全量扫描Node节点的Pod信息并生成需要收集日志的配置信息，保持最终数据的一致性。<br><br>下面是我们容器中对于标准输出和应用服务日志收集路径的一个规划:<br><div align="left"><br><img src="http://p4.qhimg.com/t018f5f853c403712a2.png" width="1000" height="208" alt=""><br></div>
+
+<ul>
+<li>容器标准输出/标准错误日志路径</li>
+</ul>
+<p>docker engine会将所有容器的标准输出和标准错误日志落盘到Node节点的/data/docker/containers/路径,该路径中包含容器的元数据和日志文件，内容如下:</p>
+<div align="left"><br><img src="http://p3.qhimg.com/t017d869984f68a4c3a.png" width="1000" height="80" alt=""><br></div>
+
+<p>我们主要负责收集该目录下标准输出日志即可。</p>
+<ul>
+<li><p>容器内应用日志</p>
+<p>  我们使用kubernetes提供的empty-dir卷，将容器内应用的日志挂载到Node节点，具体的采集路径如下图所示:</p>
+<div align="left"><br><img src="http://p7.qhimg.com/t01500d5feb59db7658.png" width="1000" height="65" alt=""><br></div>
+
+</li>
+</ul>
+<p>log-controller会动态的感知Pod的变化，并对每一个计算节点上的Pod针对这些日志路径，进行日志收集工具(logstash)的配置组装。这样日志收集工具便可以获取每个计算节点它们自己的配置信息，进行容器日志的收集工作。</p>
+<h3 id="现有采集工具缺陷"><a href="#现有采集工具缺陷" class="headerlink" title="现有采集工具缺陷"></a>现有采集工具缺陷</h3><p>对于现有的日志收集工具存在的缺陷，我们针对这些缺陷的具体解决方案是:</p>
+<ol>
+<li>缺乏动态感知配置变化的能力</li>
+</ol>
+<p>log-controller动态感知Pod的变化，并为其生成相应的日志收集(logstash)配置，推送到我们的配置中心(Qconf)，每个计算节点的logstash会周期性的从配置中心(Qconf)拉取最新的配置并进行配置热加载对容器的日志进行收集。</p>
+<ol start="2">
+<li>日志采集丢失问题</li>
+</ol>
+<p>我们以DaemonSet的方式部署logstash日志收集组件到kubernetes集群的所有Node上，logstash本身有一个句柄保持的(close_older)的功能，默认时间是(3600s)。来帮助我们在Pod异常容器被删除的情况下，也能将与该容器关联的日志文件全部收集走。保存容器内部的日志不丢失。</p>
+<ol start="3">
+<li>未明确标记日志源</li>
+</ol>
+<p>logstash允许用户自定义收集日志前缀(custome_msg_prefix)。log-controller在生成日志收集组件需要的配置时，会对custome_msg_prefix进行默认设置。下图显示的是将一条日志记录增加前缀的样式:</p>
+<div align="left"><br><img src="http://p6.qhimg.com/t01c683c558b240dcdf.png" width="1200" height="200" alt=""><br></div><br>用户也可以在容器服务产品端自定义自己需要的日志前缀或把前缀功能关掉。<br><br>通过上面的介绍就已经把容器在日志收集所面临的问题一一的解决了。接下来将介绍现在我们容器日志收集的整体架构。<br><br>## 容器云日志收集实践<br><br>首先来看下我们容器云日志收集的架构图,如下图所示:<br><div align="left"><br><img src="http://p2.qhimg.com/t0196d2750f4b982a88.png" width="1400" height="430" alt=""><br></div>
+
+<p>上面这张图就是整个容器云日志收集的架构图。</p>
+<p>名词解释:</p>
+<pre><code>1. master: kubernetes集群控制节点组件(包含:kube-apiserver,kube-controller-manager,kube-scheduler等）
+2. log-controller: 自研的一个动态感知Pod变化的组件。具体的功能上文已经描述。
+3. Qconf: 公司自研的服务发现配置中心。
+4. Logstash: 日志收集agent,已daemonset的形式部署到kubernetes集群的每一个计算节点上，用于容器的日志收集。
+5. Qbus2.0: 公司基于Kafka自研的一个消息队列产品。
+6. Elasticsearch: 一个实时分布式搜索和分析引擎，用于对收集的日志进行存储。
+7. HDFS: 一个分布式文件系统，用于对收集的日志进行存储。
+</code></pre><p>接下来在该图的基础上给大家介绍下整个容器日志的收集流程。</p>
+<p>首先用户需要在容器服务产品端创建一个应用(如:nginx)并指定该应用Pod的副本数。在指定Pod副本数的同时需要指定Pod内部容器是否需要进行日志收集工作。如果需要则去Qbus2.0申请topic。并与指定的容器进行关联，用于后续对该容器进行日志收集处理。</p>
+<p>当需要创建应用的所有准备工作处理完成之后，会将该配置已一个deployment的资源去请求master。master收到创建应用的请求之后，会将应用Pod的副本数调度到符合条件的Node上去。如下图所示:</p>
+<div align="left"><br><img src="http://p6.qhimg.com/t01f371b9fc8f011719.png" width="1400" height="430" alt=""><br></div>
+
+
+<p>于此同时log-controller会立刻感知到Pod的创建动作，则会去容器服务产品端获取与该应用关联的topic和应用服务日志路径。并在log-controller的逻辑处理层，封装好每个Node节点部署的logstash需要的配置文件。并将配置文件推送到Qconf配置中心。如下图所示:</p>
+<div align="left"><br><img src="http://p5.qhimg.com/t01a52e9bd880f7f378.png" width="1400" height="430" alt=""><br></div>
+
+<p>下面是一个计算节点在Qconf上配置文件的内容:</p>
+<div align="left"><br><img src="http://p2.qhimg.com/t019c926e3712df7818.png" width="1400" height="430" alt=""><br></div>
+
+
+<p>部署到kubernetes集群所有Node节点的logstash会周期性(默认30s)的从Qconf配置中心拉取该Node上最新的配置文件，并自动的对配置文件进行热加载。用来收集该Node上最新的容器日志数据。logstash将收集的日志推送的Qbus2.0消息队列中。如下图所示:</p>
+<div align="left"><br><img src="http://p7.qhimg.com/t019911f2f71143a27f.png" width="1400" height="430" alt=""><br></div>
+
+<p>在Qbus2.0消息队列中的数据有两种处理方式：</p>
+<ol>
+<li>不做任何处理，直接从消息队列将数据入到HDFS文件系统中。</li>
+<li>将消息队列中的数据进行一层数据清洗之后，入到Elasticsearch集群中。</li>
+</ol>
+<p>对于第一种方式，我这里就不详细的描述了，主要描述下第二种消息处理方式：<br>在日志清洗界面用户可以根据自己的需求启动多个logstash实例进行从Qbus2.0消息队列中对数据进行处理。<br>而这些logstash实例我们是以deploymnet的形式进行部署的，方便用户快速的扩缩容logstash实例的数量。并在UI可视化界面配置用户关心的清洗规则。最终将清洗完成的日志存储到Elasticsearch集群中，使用Kibana进行数据检索与展示。Kibana的展示页面如下图所示:</p>
+<div align="left"><br><img src="http://p9.qhimg.com/t01d95d1e1352fd02ee.png" width="1600" height="380" alt=""><br></div>
+
+<p>OK, 上面就是容器云整个日志收集架构的整体流程。现在的日志收集只完成了基本的日志收集处理工作，还有很多后期需要完善的工作去处理。</p>
+<p>今天的分享就到这里，谢谢大家.</p>
+</div><div class="tags"><a href="/tags/kubernetes/">kubernetes</a></div><div class="post-nav"><a class="pre" href="/2018/06/04/controller-manager/">kube-controller-manaer解析之启动流程</a><a class="next" href="/2018/05/05/cephfs/">kubernetes持久化存储cephfs</a></div></div></div></div><div class="pure-u-1-4 hidden_mid_and_down"><div id="sidebar"><div class="widget"><form class="search-form" action="//www.google.com/search" method="get" accept-charset="utf-8" target="_blank"><input type="text" name="q" maxlength="20" placeholder="Search"/><input type="hidden" name="sitesearch" value="https://github.com/xigang"/></form></div><div class="widget"><div class="widget-title"><i class="fa fa-folder-o"> Kategorien</i></div></div><div class="widget"><div class="widget-title"><i class="fa fa-star-o"> Tags</i></div><div class="tagcloud"><a href="/tags/kubernetes/" style="font-size: 15px;">kubernetes</a> <a href="/tags/linux/" style="font-size: 15px;">linux</a> <a href="/tags/etcd/" style="font-size: 15px;">etcd</a> <a href="/tags/microservices/" style="font-size: 15px;">microservices</a> <a href="/tags/docker/" style="font-size: 15px;">docker</a></div></div><div class="widget"><div class="widget-title"><i class="fa fa-file-o"> Letzte</i></div><ul class="post-list"><li class="post-list-item"><a class="post-list-link" href="/2018/08/19/kong/">微服务网关(Kong)与容器服务</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/08/18/etcd-back/">etcd集群备份及容灾恢复</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/07/08/cgroups/">浅谈Cgroups</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/06/30/lxcfs/">使用lxcfs对docker容器隔离</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/06/04/controller-manager/">kube-controller-manaer解析之启动流程</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/19/kubernetes-docker-log/">基于Kubernetes容器云日志采集与处理实践</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/05/cephfs/">kubernetes持久化存储cephfs</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/05/ceph-rbd/">kubernetes持久化存储Ceph RBD</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/05/kube-scheduler/">kube-scheduler源码解析</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/05/kubelet/">Kubelet源码分析</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-external-link"> Blogroll</i></div><ul></ul><a href="http://www.example1.com/" title="site-name1" target="_blank">site-name1</a><ul></ul><a href="http://www.example2.com/" title="site-name2" target="_blank">site-name2</a><ul></ul><a href="http://www.example3.com/" title="site-name3" target="_blank">site-name3</a></div></div></div><div class="pure-u-1 pure-u-md-3-4"><div id="footer">Copyright © 2018 <a href="/." rel="nofollow">xigang's home.</a> Powered by<a rel="nofollow" target="_blank" href="https://hexo.io"> Hexo.</a><a rel="nofollow" target="_blank" href="https://github.com/tufu9441/maupassant-hexo"> Theme</a> by<a rel="nofollow" target="_blank" href="https://github.com/pagecho"> Cho.</a></div></div></div><a class="show" id="rocket" href="#top"></a><script type="text/javascript" src="/js/totop.js?v=0.0.0" async></script><script type="text/javascript" src="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.js" async></script><script type="text/javascript" src="/js/fancybox.js?v=0.0.0" async></script><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.css"><script type="text/javascript" src="/js/codeblock-resizer.js?v=0.0.0"></script><script type="text/javascript" src="/js/smartresize.js?v=0.0.0"></script></div></body></html>

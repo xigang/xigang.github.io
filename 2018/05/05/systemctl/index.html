@@ -1,0 +1,124 @@
+<!DOCTYPE html><html><head><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description"><title>浅谈Linux服务管理器Systemd | xigang's home</title><link rel="stylesheet" type="text/css" href="/css/style.css?v=0.0.0"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/normalize/8.0.0/normalize.min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/pure-min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/grids-responsive-min.css"><link rel="stylesheet" href="//cdn.bootcss.com/font-awesome/4.7.0/css/font-awesome.min.css"><script type="text/javascript" src="//cdn.bootcss.com/jquery/3.3.1/jquery.min.js"></script><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png"></head><body><div class="body_container"><div id="header"><div class="site-name"><h1 class="hidden">浅谈Linux服务管理器Systemd</h1><a id="logo" href="/.">xigang's home</a><p class="description">简单不先于复杂，而是在复杂之后</p></div><div id="nav-menu"><a class="current" href="/."><i class="fa fa-home"> Start</i></a><a href="/archives/"><i class="fa fa-archive"> Archiv</i></a><a href="/about/"><i class="fa fa-user"> Über</i></a><a href="/atom.xml"><i class="fa fa-rss"> RSS</i></a></div></div><div class="pure-g" id="layout"><div class="pure-u-1 pure-u-md-3-4"><div class="content_container"><div class="post"><h1 class="post-title">浅谈Linux服务管理器Systemd</h1><div class="post-meta">May 5, 2018</div><div class="post-content"><p>近年来，Linux系统的init进程经历了两次重大演进，传统的sysvinit已逐渐淡出了历史的舞台，新秀Upstart和Systemd陆续走上了舞台，鉴于现在越来越多的Linux发行版均采纳了systemd,并且对于软件开发人员和系统管理员经常用到，就抽时间学习了下systemd的基本原理及使用。仅仅了解systemd的一个表面和大家分享下:)</p>
+<h2 id="Systemd介绍"><a href="#Systemd介绍" class="headerlink" title="Systemd介绍"></a>Systemd介绍</h2><p>Systemd 是Linux系统中最新的初始化系统(init), 它的设计目的就是提高系统的启动速度。Systemd和Ubuntu的UpStart是竞争对手,但是现在已经被systemd干掉了，从ubuntu 15.04版本起已经切换到了systemd。</p>
+<p>这样我们的Systemd，在Linux系统就不需要<code>init</code>了。Systemd 取代了<code>initd</code>,成为系统的第一个进程(PID=1),其它进程都是它的子进程。</p>
+<h2 id="Systemd特性"><a href="#Systemd特性" class="headerlink" title="Systemd特性"></a>Systemd特性</h2><p>Systemd系统很复杂，Systemd的架构图:</p>
+<div align="center"><br><img src="http://p9.qhimg.com/t0106edceb4df49fb68.png" width="600" height="" alt="systemd"><br></div>
+
+
+<p>Systemd的主要特性:</p>
+<ul>
+<li>支持并行化任务(更快的启动速度)</li>
+<li>采用socket式与D-bus总线式激活服务</li>
+<li>按需启动守护进程(daemon)</li>
+<li>利用Linux的cgroups监控进程</li>
+<li>支持快照和系统恢复</li>
+<li>维护挂载点和自动挂载点</li>
+<li>各服务间基于依赖关系进行精密控制</li>
+</ul>
+<p>下面挑几个特性介绍下。</p>
+<h3 id="更快的启动速度"><a href="#更快的启动速度" class="headerlink" title="更快的启动速度"></a>更快的启动速度</h3><p>systemd提供了比UpStart更激进的并行启动能力，采用了socket/D-Bus activation等技术服务。使得系统的启动速度更快。为了提高这方便的性能，Systemd主要做了两件事:</p>
+<ul>
+<li>尽可能启动更少的进程</li>
+<li>尽可能将更多的进程并行启动</li>
+</ul>
+<p>下面的图演示了Systemd相对于Upstart和SysVInit在并发启动速度方面的改进:</p>
+<div align="center"><br><img src="http://p1.qhimg.com/t017fb0d373eaf221cd.png" width="700" height="300" alt="systemd"><br></div>
+
+<p>假设有6个不同的启动项目，如job1,job2等等。</p>
+<p>在SysVInit中，每个项目都是一个独立的脚本，他们由SysVInit顺序地，串行的调用执行，因此总的执行时间为T1+T2+T3+T4+T5+T6。</p>
+<p>在Upstart能过并行的执行任务，但是总的启动时间减少为T1+T2+T3。虽然这样的启动速度比起SysVinit有很大的改进，但是对于有依赖的服务还是必须有先后的启动顺序。这样还是不能满足官大使用的欲望，systemd可以使所有的任务都同时的并发执行，总的启动时间进一步的降低为T1。</p>
+<h3 id="按需启动守护进程-daemon"><a href="#按需启动守护进程-daemon" class="headerlink" title="按需启动守护进程(daemon)"></a>按需启动守护进程(daemon)</h3><p>在SysVinit的时代，在系统初始化的时候会将所有的后台系统全部启动，这样的缺点是: </p>
+<ul>
+<li>启动时间长</li>
+<li>造成资源的浪费</li>
+</ul>
+<p>Systemd则可以提供按需启动的能力，只有在某个服务被真正请求的时候才启动它。当该服务结束，Systemd可以关闭它，等待下次需要时再次启动它。</p>
+<h3 id="支持快照和系统恢复"><a href="#支持快照和系统恢复" class="headerlink" title="支持快照和系统恢复"></a>支持快照和系统恢复</h3><p>人们无法准确地知道系统当前运行了哪些服务。Systemd 快照提供了一种将当前系统运行状态保存并恢复的能力。<br>比如系统当前正运行服务 A 和 B，可以用 systemd 命令行对当前系统运行状况创建快照。然后将进程 A 停止，或者做其他的任意的对系统的改变，比如启动新的进程 C。在这些改变之后，运行 systemd 的快照恢复命令，就可立即将系统恢复到快照时刻的状态，即只有服务 A，B 在运行。一个可能的应用场景是调试：比如服务器出现一些异常，为了调试用户将当前状态保存为快照，然后可以进行任意的操作，比如停止服务等等。等调试结束，恢复快照即可。</p>
+<p>这个快照功能目前在 Systemd 中并不完善，似乎开发人员也没有特别关注它，因此有报告指出它还存在一些使用上的问题，使用时尚需慎重。</p>
+<h3 id="下面的内容是我们日常比较关注的。怎么使用systemd"><a href="#下面的内容是我们日常比较关注的。怎么使用systemd" class="headerlink" title="下面的内容是我们日常比较关注的。怎么使用systemd."></a>下面的内容是我们日常比较关注的。怎么使用systemd.</h3><h4 id="Unit"><a href="#Unit" class="headerlink" title="Unit"></a>Unit</h4><p>Systemd可以管理所有的系统资源，不同的资源被称为<code>Unit</code>。</p>
+<p>Unit一共12种:</p>
+<ul>
+<li>Service unit：系统服务</li>
+<li>Target unit：多个 Unit 构成的一个组</li>
+<li>Device Unit：硬件设备</li>
+<li>Mount Unit：文件系统的挂载点</li>
+<li>Automount Unit：自动挂载点</li>
+<li>Path Unit：文件或路径</li>
+<li>Scope Unit：不是由 Systemd 启动的外部进程</li>
+<li>Slice Unit：进程组</li>
+<li>Snapshot Unit：Systemd 快照，可以切回某个快照</li>
+<li>Socket Unit：进程间通信的 socket</li>
+<li>Swap Unit：swap 文件</li>
+<li>Timer Unit：定时器</li>
+</ul>
+<h3 id="Unit-状态"><a href="#Unit-状态" class="headerlink" title="Unit 状态"></a>Unit 状态</h3><p><code>systemctl status</code> 用于查看系统状态或单个Unit状态。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">显示系统状态</span><br><span class="line">$ systemctl status </span><br><span class="line"></span><br><span class="line">显示单个 Unit 的状态</span><br><span class="line">$ systemctl status kube-apiserver</span><br></pre></td></tr></table></figure>
+<h3 id="Unit-管理"><a href="#Unit-管理" class="headerlink" title="Unit 管理"></a>Unit 管理</h3><p>对于用户最常用的就是使用<code>systemctl</code>进行<code>start</code>或<code>stop</code>服务。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">立即启动一个服务</span><br><span class="line">$ sudo systemctl start kube-apiserver.service</span><br><span class="line"></span><br><span class="line">立即停止一个服务</span><br><span class="line">$ sudo systemctl stop kube-apiserver.service</span><br><span class="line"></span><br><span class="line">重启一个服务</span><br><span class="line">$ sudo systemctl restart kube-apiserver.service</span><br><span class="line"></span><br><span class="line">杀死一个服务的所有子进程</span><br><span class="line">$ sudo systemctl kill kube-apiserver.service</span><br><span class="line"></span><br><span class="line">重新加载一个服务的配置文件</span><br><span class="line">$ sudo systemctl reload kube-apiserver.service</span><br><span class="line"></span><br><span class="line">重载所有修改过的配置文件</span><br><span class="line">$ sudo systemctl daemon-reload</span><br></pre></td></tr></table></figure>
+<h3 id="Unit-依赖关系"><a href="#Unit-依赖关系" class="headerlink" title="Unit 依赖关系"></a>Unit 依赖关系</h3><p>Unit之间存在依赖关系，A依赖B，就意味着Systemd在启动A的时候，同时获回去启动B。<br><code>systemctl list-dependencies</code> 命令列出一个Unit的所有依赖关系。</p>
+<p>就像上面的简单例子，启动kube-apiserver.servie服务之前，systemd会去启动etcd.service</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ systemctl list-dependencies kube-apiserver.service</span><br></pre></td></tr></table></figure>
+<h4 id="Unit的配置文件"><a href="#Unit的配置文件" class="headerlink" title="Unit的配置文件"></a>Unit的配置文件</h4><p>每一个Unit都有一个配置文件，告诉Systemd怎么启动这个Unit.</p>
+<p>Systemd默认从<code>/etc/systemd/system</code>目录读取配置文件。但是里面存放的大部分是符号链接，指向<code>/etc/lib/systemd/system</code>目录。正真的配置文件存放在这里。</p>
+<p><code>systemctl enable</code> 命令用于在上面两个目录之间，建立符号链接关系。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">$ systemctl enable  kube-apiserver.service</span><br><span class="line">等同于</span><br><span class="line">$ sudo ln -s &apos;/usr/lib/systemd/system/kube-apiserver.service&apos; &apos;/etc/systemd/system/multi-user.target.wants/kube-apiserver.service&apos;</span><br></pre></td></tr></table></figure>
+<p>如果在配置文件中设置了开机启动，<code>systemctl enable</code>命令相当于激活开机启动。</p>
+<p>与之对应的，<code>systemctl disable</code>命令用于在两个目录之间，撤销符号链接关系，相当于撤销开机启动。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ systemctl disable kube-apiserver.service</span><br></pre></td></tr></table></figure>
+<h3 id="配置文件的格式"><a href="#配置文件的格式" class="headerlink" title="配置文件的格式"></a>配置文件的格式</h3><p>下面是一个简单的Unit配置文件：</p>
+<div align="center"><br><img src="http://p4.qhimg.com/t0141e8609b872d17a9.png" width="600" height="" alt="systemd"><br></div>
+
+
+<p><code>[Unit]</code>区块通常是配置文件的第一个区块，用来定义 Unit 的元数据，以及配置与其他 Unit 的关系。它的主要字段如下</p>
+<ul>
+<li>Description：简短描述</li>
+<li>Documentation：文档地址</li>
+<li>Requires：当前 Unit 依赖的其他 Unit，如果它们没有运行，当前 Unit 会启动失败</li>
+<li>Wants：与当前 Unit 配合的其他 Unit，如果它们没有运行，当前 Unit 不会启动失败</li>
+<li>BindsTo：与Requires类似，它指定的 Unit 如果退出，会导致当前 Unit 停止运行</li>
+<li>Before：如果该字段指定的 Unit 也要启动，那么必须在当前 Unit 之后启动</li>
+<li>After：如果该字段指定的 Unit 也要启动，那么必须在当前 Unit 之前启动</li>
+<li>Conflicts：这里指定的 Unit 不能与当前 Unit 同时运行</li>
+<li>Condition…：当前 Unit 运行必须满足的条件，否则不会运行</li>
+<li>Assert…：当前 Unit 运行必须满足的条件，否则会报启动失败</li>
+</ul>
+<p><code>[Service]</code>区块用来 Service 的配置，只有 Service 类型的 Unit 才有这个区块。它的主要字段如下。</p>
+<ul>
+<li>Type：定义启动时的进程行为。它有以下几种值。</li>
+<li>Type=simple：默认值，执行ExecStart指定的命令，启动主进程</li>
+<li>Type=forking：以 fork 方式从父进程创建子进程，创建后父进程会立即退出</li>
+<li>Type=oneshot：一次性进程，Systemd 会等当前服务退出，再继续往下执行</li>
+<li>Type=dbus：当前服务通过D-Bus启动</li>
+<li>Type=notify：当前服务启动完毕，会通知Systemd，再继续往下执行</li>
+<li>Type=idle：若有其他任务执行完毕，当前服务才会运行</li>
+<li>ExecStart：启动当前服务的命令</li>
+<li>ExecStartPre：启动当前服务之前执行的命令</li>
+<li>ExecStartPost：启动当前服务之后执行的命令</li>
+<li>ExecReload：重启当前服务时执行的命令</li>
+<li>ExecStop：停止当前服务时执行的命令</li>
+<li>ExecStopPost：停止当其服务之后执行的命令</li>
+<li><p>RestartSec：自动重启当前服务间隔的秒数</p>
+</li>
+<li><p>Restart：定义何种情况 Systemd 会自动重启当前服务，可能的值包括always（总是重启）、on-success、on-failure、on-abnormal、on-abort、on-watchdog</p>
+</li>
+<li>TimeoutSec：定义 Systemd 停止当前服务之前等待的秒数</li>
+<li>Environment：指定环境变量</li>
+</ul>
+<p>如果对kubernetes中<code>Container Lifecycle Hooks</code>中的<code>PostStart</code>和<code>PreStop</code>熟悉的话，应该就是借鉴了Systemd中<code>ExecStartPost</code>和<code>ExecStartPre</code>的思想。我猜的啊：）</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">There are two hooks that are exposed to Containers:</span><br><span class="line">PostStart</span><br><span class="line">This hook executes immediately after a container is created. However, there is no guarantee that the hook will execute before the container ENTRYPOINT. No parameters are passed to the handler.</span><br><span class="line">PreStop</span><br><span class="line">This hook is called immediately before a container is terminated. It is blocking, meaning it is synchronous, so it must complete before the call to delete the container can be sent. No parameters are passed to the handler.</span><br></pre></td></tr></table></figure>
+<p><code>[Install]</code>通常是配置文件的最后一个区块，用来定义如何启动，以及是否开机启动。它的主要字段如下。</p>
+<ul>
+<li>WantedBy：它的值是一个或多个 Target，当前 Unit 激活时（enable）符号链接会放入/etc/systemd/system目录下面以 Target 名 + .wants后缀构成的子目录中</li>
+<li>RequiredBy：它的值是一个或多个 Target，当前 Unit 激活时，符号链接会放入/etc/systemd/system目录下面以 Target 名 + .required后缀构成的子目录中</li>
+<li>Alias：当前 Unit 可用于启动的别名</li>
+<li>Also：当前 Unit 激活（enable）时，会被同时激活的其他 Unit</li>
+</ul>
+<h2 id="日志管理"><a href="#日志管理" class="headerlink" title="日志管理"></a>日志管理</h2><p>systemd 提供了自己的日志系统（logging system），称为 <code>journal</code>。使用 systemd 日志，无需额外安装日志服务（syslog）。读取日志的命令：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ journalctl</span><br></pre></td></tr></table></figure>
+<p>默认情况下（当 Storage= 在文件 /etc/systemd/journald.conf 中被设置为 auto），日志记录将被写入 /var/log/journal/。该目录是 systemd 软件包的一部分。若被删除，systemd 不会自动创建它，直到下次升级软件包时重建该目录。如果该目录缺失，systemd 会将日志记录写入 /run/systemd/journal。这意味着，系统重启后日志将丢失。</p>
+<h3 id="过滤输出"><a href="#过滤输出" class="headerlink" title="过滤输出"></a>过滤输出</h3><p><code>journalctl</code>可以根据特定字段过滤输出。如果过滤的字段比较多，需要较长时间才能显示出来。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line">查看系统本次启动的日志</span><br><span class="line">$ sudo journalctl -b</span><br><span class="line">$ sudo journalctl -b -0</span><br><span class="line"></span><br><span class="line">查看上一次启动的日志（需更改设置）</span><br><span class="line">$ sudo journalctl -b -1</span><br><span class="line"></span><br><span class="line">查看指定时间的日志</span><br><span class="line">$ sudo journalctl --since=&quot;2012-10-30 18:17:16&quot;</span><br><span class="line">$ sudo journalctl --since &quot;20 min ago&quot;</span><br><span class="line">$ sudo journalctl --since yesterday</span><br><span class="line">$ sudo journalctl --since &quot;2015-01-10&quot; --until &quot;2015-01-11 03:00&quot;</span><br><span class="line">$ sudo journalctl --since 09:00 --until &quot;1 hour ago&quot;</span><br><span class="line"></span><br><span class="line">显示尾部的最新10行日志</span><br><span class="line">$ sudo journalctl -n</span><br><span class="line"></span><br><span class="line">显示尾部指定行数的日志</span><br><span class="line">$ sudo journalctl -n 20</span><br><span class="line"></span><br><span class="line">实时滚动显示最新日志</span><br><span class="line">$ sudo journalctl -f</span><br><span class="line"></span><br><span class="line">查看指定服务的日志</span><br><span class="line">$ sudo journalctl /usr/lib/systemd/systemd</span><br><span class="line"></span><br><span class="line">查看指定进程的日志</span><br><span class="line">$ sudo journalctl _PID=1</span><br><span class="line"></span><br><span class="line">查看某个路径的脚本的日志</span><br><span class="line">$ sudo journalctl /usr/bin/bash</span><br><span class="line"></span><br><span class="line">查看指定用户的日志</span><br><span class="line">$ sudo journalctl _UID=33 --since today</span><br><span class="line"></span><br><span class="line">查看某个 Unit 的日志</span><br><span class="line">$ sudo journalctl -u nginx.service</span><br><span class="line">$ sudo journalctl -u nginx.service --since today</span><br><span class="line"></span><br><span class="line">实时滚动显示某个 Unit 的最新日志</span><br><span class="line">$ sudo journalctl -u nginx.service -f</span><br><span class="line"></span><br><span class="line">合并显示多个 Unit 的日志</span><br><span class="line">$ journalctl -u nginx.service -u php-fpm.service --since today</span><br></pre></td></tr></table></figure>
+<h3 id="日志大小限制"><a href="#日志大小限制" class="headerlink" title="日志大小限制"></a>日志大小限制</h3><p>可以修改配置文件指定最大限制。如限制日志最大 50MiB：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">/etc/systemd/journald.conf</span><br><span class="line">SystemMaxUse=50M</span><br></pre></td></tr></table></figure>
+<p>还可以通过配置片段而不是全局配置文件进行设置：</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">/etc/systemd/journald.conf.d/00-journal-size.conf</span><br><span class="line">[Journal]</span><br><span class="line">SystemMaxUse=50M</span><br></pre></td></tr></table></figure></div><div class="tags"><a href="/tags/linux/">linux</a></div><div class="post-nav"><a class="pre" href="/2018/05/05/kubelet/">Kubelet源码分析</a><a class="next" href="/2018/05/05/etcd-md/">etcd入门篇-集群搭建及基本使用</a></div></div></div></div><div class="pure-u-1-4 hidden_mid_and_down"><div id="sidebar"><div class="widget"><form class="search-form" action="//www.google.com/search" method="get" accept-charset="utf-8" target="_blank"><input type="text" name="q" maxlength="20" placeholder="Search"/><input type="hidden" name="sitesearch" value="https://github.com/xigang"/></form></div><div class="widget"><div class="widget-title"><i class="fa fa-folder-o"> Kategorien</i></div></div><div class="widget"><div class="widget-title"><i class="fa fa-star-o"> Tags</i></div><div class="tagcloud"><a href="/tags/kubernetes/" style="font-size: 15px;">kubernetes</a> <a href="/tags/linux/" style="font-size: 15px;">linux</a> <a href="/tags/etcd/" style="font-size: 15px;">etcd</a> <a href="/tags/microservices/" style="font-size: 15px;">microservices</a> <a href="/tags/docker/" style="font-size: 15px;">docker</a></div></div><div class="widget"><div class="widget-title"><i class="fa fa-file-o"> Letzte</i></div><ul class="post-list"><li class="post-list-item"><a class="post-list-link" href="/2018/08/19/kong/">微服务网关(Kong)与容器服务</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/08/18/etcd-back/">etcd集群备份及容灾恢复</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/07/08/cgroups/">浅谈Cgroups</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/06/30/lxcfs/">使用lxcfs对docker容器隔离</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/06/04/controller-manager/">kube-controller-manaer解析之启动流程</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/19/kubernetes-docker-log/">基于Kubernetes容器云日志采集与处理实践</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/05/cephfs/">kubernetes持久化存储cephfs</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/05/ceph-rbd/">kubernetes持久化存储Ceph RBD</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/05/kube-scheduler/">kube-scheduler源码解析</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/05/kubelet/">Kubelet源码分析</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-external-link"> Blogroll</i></div><ul></ul><a href="http://www.example1.com/" title="site-name1" target="_blank">site-name1</a><ul></ul><a href="http://www.example2.com/" title="site-name2" target="_blank">site-name2</a><ul></ul><a href="http://www.example3.com/" title="site-name3" target="_blank">site-name3</a></div></div></div><div class="pure-u-1 pure-u-md-3-4"><div id="footer">Copyright © 2018 <a href="/." rel="nofollow">xigang's home.</a> Powered by<a rel="nofollow" target="_blank" href="https://hexo.io"> Hexo.</a><a rel="nofollow" target="_blank" href="https://github.com/tufu9441/maupassant-hexo"> Theme</a> by<a rel="nofollow" target="_blank" href="https://github.com/pagecho"> Cho.</a></div></div></div><a class="show" id="rocket" href="#top"></a><script type="text/javascript" src="/js/totop.js?v=0.0.0" async></script><script type="text/javascript" src="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.js" async></script><script type="text/javascript" src="/js/fancybox.js?v=0.0.0" async></script><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.css"><script type="text/javascript" src="/js/codeblock-resizer.js?v=0.0.0"></script><script type="text/javascript" src="/js/smartresize.js?v=0.0.0"></script></div></body></html>
