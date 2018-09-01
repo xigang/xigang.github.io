@@ -1,0 +1,109 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description"><title>GPU Container on Kubernetes | xigang's home</title><link rel="stylesheet" type="text/css" href="/css/style.css?v=0.0.0"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/normalize/8.0.0/normalize.min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/pure-min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/grids-responsive-min.css"><link rel="stylesheet" href="//cdn.bootcss.com/font-awesome/4.7.0/css/font-awesome.min.css"><script type="text/javascript" src="//cdn.bootcss.com/jquery/3.3.1/jquery.min.js"></script><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png"></head><body><div class="body_container"><div id="header"><div class="site-name"><h1 class="hidden">GPU Container on Kubernetes</h1><a id="logo" href="/.">xigang's home</a><p class="description">简单不先于复杂，而是在复杂之后</p></div><div id="nav-menu"><a class="current" href="/."><i class="fa fa-home"> 首页</i></a><a href="/archives/"><i class="fa fa-archive"> 归档</i></a><a href="/about/"><i class="fa fa-user"> 关于</i></a><a href="/atom.xml"><i class="fa fa-rss"> 订阅</i></a></div></div><div class="pure-g" id="layout"><div class="pure-u-1 pure-u-md-3-4"><div class="content_container"><div class="post"><h1 class="post-title">GPU Container on Kubernetes</h1><div class="post-meta">Sep 1, 2018</div><div class="post-content"><p>在机器学习，深度学习中，使用GPU加快对模型的训练是不可避免的。由于公司的搜索实验室和人工智能研究院都想使用容器服务平台已容器的方式部署他们的服务，前提就是需要kubernetes对GPU支持。值得高兴的是kubernetes从1.6版本就已经支持了对GPU的支持(只支持单容器单卡)，并且kubernetes团队在1.9版本支持了多容器多卡及对GPU监控指标的暴露。</p>
+<p>注意: 现在kubernetes只支持Nvidia GPU.</p>
+<h2 id="深度学习在部署上面临的一些问题"><a href="#深度学习在部署上面临的一些问题" class="headerlink" title="深度学习在部署上面临的一些问题"></a>深度学习在部署上面临的一些问题</h2><ul>
+<li>不同的训练框架(如：caffe, tensorflow…)，可能对依赖库版有不同版本的需求。</li>
+<li>在训练模型的时候，对底层的运行时有不同的需求(如: CentOS, Ubuntu…)。</li>
+<li>不同的学习模型需要不同版本的Nvidia GPU(如: k80, k40m, p4,p40,v100)和驱动。</li>
+<li>如何能快速的对服务进行弹性扩缩容。</li>
+<li>高效的使用GPU资源。(对于这点，现在容器对GPU的资源浪费还是没有根本性的解决，官方还没有支持多容器同卡的使用，等待官方后期支持)。</li>
+</ul>
+<p>针对上面提出的这些问题，我们下面介绍下如何使用容器方式来逐一解决这些问题。</p>
+<h2 id="为什么以容器的方式部署GPU服务"><a href="#为什么以容器的方式部署GPU服务" class="headerlink" title="为什么以容器的方式部署GPU服务"></a>为什么以容器的方式部署GPU服务</h2><ul>
+<li>基于容器技术，用户可以根据自己的需要选择自己的训练框架(caffe, tensorflow…)，底层的运行时(CentOS， Ubuntu)来针对自己的场景制作镜像，并且可以基于Kubernetes的lable机制来选择需要使用的Nvidia GPU型号并对容器进行快速的扩缩容。 </li>
+<li><p>基于容器技术，可以对GPU的设备进行隔离。每个容器只能看到它使用的GPU设备。</p>
+<p> 如: 在容器的resources(manifest文件)处指定该容器使用的GPU数量, 并创建该容器，进入(exec)到容器中查看使用的GPU卡的数量是2:</p>
+</li>
+</ul>
+<div align="left"><br><img src="http://p9.qhimg.com/t01ebabad4458c896ab.png" width="750" height="230" alt="gpu"><br></div>
+
+
+<pre><code>并且在容器中可以看到容器已经对GPU进行了隔离：
+</code></pre><div align="left"><br><img src="http://p0.qhimg.com/t01388978edb2979fec.png" width="750" height="230" alt="gpu"><br></div>
+
+<ul>
+<li>底层的Nvidia Driver对用户不可见，用户只需要关心上层的业务逻辑即可。使用容器的方式，容器服务平台的管理员可以在部署GPU机器的时候，将驱动安装完成，用户端在创建容器的时候，会以卷(volume)的形式将Cuda库挂载到容器里面，供上层的服务使用。如下图是传统方式和容器化方式的一个对比图:</li>
+</ul>
+<div align="left"><br><img src="http://p8.qhimg.com/t01402efd8734e586d7.png" width="750" height="230" alt="gpu"><br></div>
+
+<ul>
+<li><p>多维度(Deployment, Pod, Container)的对GPU的资源使用情况进行监控，kubernetes 1.9版本暴露了针对GPU容器的显存和使用率的指标(而不需要直接通过调用NVML库来获取GPU卡的使用情况)。kubernetes暴露出来的metrics如下:</p>
+<ul>
+<li>container_accelerator_memory_used_bytes</li>
+<li>container_accelerator_duty_cycle</li>
+</ul>
+</li>
+</ul>
+<h2 id="如何实现GPU容器作为服务"><a href="#如何实现GPU容器作为服务" class="headerlink" title="如何实现GPU容器作为服务"></a>如何实现GPU容器作为服务</h2><p>GPU集群部署</p>
+<ol>
+<li>安装 Nvidia Driver</li>
+<li>安装 docker</li>
+<li>安装 nvidia-docker1.0(暂时还没有使用nvidia-docker 2.0)</li>
+<li>验证</li>
+<li>存在的问题，及解决方案</li>
+</ol>
+<h3 id="安装-Nvidia-Driver"><a href="#安装-Nvidia-Driver" class="headerlink" title="安装 Nvidia Driver"></a>安装 Nvidia Driver</h3><p>Nvidia Driver驱动在宿主机上的示意图:</p>
+<div align="left"><br><img src="http://p6.qhimg.com/t01818cc709134b324d.png" width="300" height="400" alt="gpu"><br></div>
+
+<p>从ELrepo源中安装驱动，添加ELrepo数据源:<a href="http://elrepo.org/tiki/tiki-index.php" target="_blank" rel="noopener">http://elrepo.org/tiki/tiki-index.php</a></p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">sudo rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org</span><br><span class="line">sudo rpm -Uvh https://www.elrepo.org/elrepo-release-7.0-3.el7.elrepo.noarch.rpm</span><br></pre></td></tr></table></figure>
+<p>安装显卡检查程序:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">sudo yum install nvidia-detect</span><br></pre></td></tr></table></figure>
+<p>检查显卡型号，并选择对应的驱动:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">nvidia-detect -v</span><br><span class="line">Probing for supported NVIDIA devices...</span><br><span class="line">[10de:06dd] NVIDIA Corporation GF100GL [Quadro 4000]</span><br><span class="line">This device requires the current 384.98 NVIDIA driver kmod-nvidia</span><br></pre></td></tr></table></figure>
+<p>根据nvidia-detest的输出信息，可以知道显卡的型号，以及要使用的驱动程序版本.如<code>384.98</code></p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">yum install kmod-nvidia-384.98-1.el7_4.elrepo.x86_64</span><br></pre></td></tr></table></figure>
+<p>重启服务器:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">reboot</span><br></pre></td></tr></table></figure>
+<p>检查nvidia模块是否加载成功:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">lsmod | grep nvidia</span><br><span class="line">nvidia_drm 44108 0</span><br><span class="line">nvidia_modeset 841676 1 nvidia_drm</span><br><span class="line">drm_kms_helper 163265 2 ast,nvidia_drm</span><br><span class="line">drm 370825 5 ast,ttm,drm_kms_helper,nvidia_drm</span><br><span class="line">nvidia 13117469 1 nvidia_modeset</span><br><span class="line">i2c_core 40756 8 ast,drm,igb,i2c_i801,ipmi_ssif,drm_kms_helper,i2c_algo_bit,nvid</span><br></pre></td></tr></table></figure>
+<h3 id="安装docker"><a href="#安装docker" class="headerlink" title="安装docker"></a>安装docker</h3><p>nvidia-docker1.0 对于docker的安装。不需要进行调整，但是如果使用的是nvidia-docker 2.0则需要进行相关的调整(会重写docker配置文件/etc/docker/daemon.json)。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"># yum install docker-ce-18.01 -y</span><br></pre></td></tr></table></figure>
+<h3 id="安装-nvidia-docker-1-0"><a href="#安装-nvidia-docker-1-0" class="headerlink" title="安装 nvidia-docker 1.0"></a>安装 nvidia-docker 1.0</h3><ul>
+<li><p>安装环境需求</p>
+<p>  The list of prerequisites for running nvidia-docker is described below.<br>  For information on how to install Docker for your Linux distribution, please refer to the Docker documentation.</p>
+<ol>
+<li>GNU/Linux x86_64 with kernel version &gt; 3.10</li>
+<li>Docker &gt;= 1.9 (official docker-engine, docker-ce or docker-ee only)</li>
+<li>NVIDIA GPU with Architecture &gt; Fermi (2.1)</li>
+<li><p>NVIDIA drivers &gt;= 340.29 with binary nvidia-modprobe</p>
+<p>Your driver version might limit your CUDA capabilities (see CUDA requirements)</p>
+</li>
+</ol>
+</li>
+<li><p>安装nvidia-docker1.0</p>
+<ol>
+<li>Install the repository for your distribution by following the instructions here.<a href="https://nvidia.github.io/nvidia-docker/" target="_blank" rel="noopener">https://nvidia.github.io/nvidia-docker/</a></li>
+<li><p>Install the nvidia-docker package</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">sudo yum install nvidia-docker</span><br></pre></td></tr></table></figure>
+<p>The package installation will automatically setup the nvidia-docker-plugin and depending on your distribution, register it with the init system.</p>
+</li>
+</ol>
+</li>
+<li><p>启动 nvidia-docker</p>
+<p>  编辑 nvidia-docker.service 文件:</p>
+  <figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">systemctl edit nvidia-docker.service</span><br></pre></td></tr></table></figure>
+<p>  文件内容:</p>
+  <figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">[Service]</span><br><span class="line">ExecStart=</span><br><span class="line">ExecStart=/usr/bin/nvidia-docker-plugin -s $SOCK_DIR -d /usr/local/nvidia-driver</span><br></pre></td></tr></table></figure>
+  <figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">systemctl start nvidia-docker</span><br></pre></td></tr></table></figure>
+</li>
+</ul>
+<p>启动后，它会创建一个数据卷<code>nvidia_driver_384. 98</code>,且对应着宿主机上会生成1个目录<code>/usr/local/nvidia-driver/nvidia_driver/384.98/</code>.</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">docker volume ls</span><br><span class="line">DRIVER VOLUME NAME</span><br><span class="line">local 7ec8fa85b2c9a020b0591a0d397f76b3c521e2f975ea54e78d75711b8114e22f</span><br><span class="line">local 976b4c8ba4136d1049e5fd3d072dc31501cb2c6a1e163d4939ba789d3c2c2c1b</span><br><span class="line">nvidia-docker nvidia_driver_384. 98</span><br></pre></td></tr></table></figure>
+<p>如果<code>nvidia-docker nvidia_driver_384. 98</code>数据卷没有，则肯定是启动有问题，可以根据日志排查定位问题，如下面的错误信息:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">Error: mkdir /usr/local/nvidia-driver/: permission denied</span><br></pre></td></tr></table></figure>
+<p>这个时候需要手动创建，创建方式:</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">mkdir -p /usr/local/nvidia-driver</span><br><span class="line">chown -R  nvidia-docker.nvidia-docker /usr/local/nvidia-driver</span><br><span class="line">docker volume create -d nvidia-docker --name nvidia_driver_384.98</span><br></pre></td></tr></table></figure>
+<p>5.运行GPU容器检查是否正常</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">nvidia-docker run --rm nvidia/cuda nvidia-smi</span><br></pre></td></tr></table></figure>
+<p>能正常输出GPU信息说明安装没有问题。<br>输出内容如下:</p>
+<div align="left"><br><img src="http://p4.qhimg.com/t01e0fe4e4fceb62f56.png" width="750" height="430" alt="gpu"><br></div>
+
+<h3 id="存在的问题及解决方案"><a href="#存在的问题及解决方案" class="headerlink" title="存在的问题及解决方案"></a>存在的问题及解决方案</h3><p>直接将nvidia驱动挂载到容器内部：<br>类似下图:</p>
+<div align="left"><br><img src="http://p8.qhimg.com/t01878626cbf0888b1c.png" width="750" height="230" alt="gpu"><br></div>
+
+<p>如果向现在这样直接把<code>/usr/local/nvidia-driver/nvidia_driver/384.98/</code>驱动已卷的形式通过kubernetes的manifest的形式挂载到容器中，只能针对<code>384.98</code>这种驱动型号，可能存在不同的GPU机器使用不同型号的驱动，这样做是不可行的，所有可以使用link的方式统一驱动的挂载路径，如下图所示:</p>
+<div align="left"><br><img src="http://p2.qhimg.com/t0179983fae07b2bef0.png" width="750" height="230" alt="gpu"><br></div>
+
+<p>通过这种方式不同型号的驱动，在kubernetes这层是无感知的。</p>
+<h2 id="参考"><a href="#参考" class="headerlink" title="参考:"></a>参考:</h2><p><a href="https://www.openstack.org/assets/presentation-media/OpenStack-Boston-Summit-Presentation.pdf" target="_blank" rel="noopener">https://www.openstack.org/assets/presentation-media/OpenStack-Boston-Summit-Presentation.pdf</a><br><a href="https://www.openstack.org/videos/boston-2017/container-as-a-service-on-gpu-cloud-our-decision-among-k8s-mesos-docker-swarm-and-openstack-zun" target="_blank" rel="noopener">https://www.openstack.org/videos/boston-2017/container-as-a-service-on-gpu-cloud-our-decision-among-k8s-mesos-docker-swarm-and-openstack-zun</a><br><a href="https://github.com/NVIDIA/nvidia-docker/wiki/Installation-(version-1.0">https://github.com/NVIDIA/nvidia-docker/wiki/Installation-(version-1.0)</a>)</p>
+</div><div class="tags"><a href="/tags/kubernetes/">kubernetes</a><a href="/tags/machine-learning/">machine-learning</a><a href="/tags/nvidia-docker/">nvidia-docker</a><a href="/tags/docker/">docker</a></div><div class="post-nav"><a class="next" href="/2018/08/19/kong/">微服务网关(Kong)与容器服务</a></div></div></div></div><div class="pure-u-1-4 hidden_mid_and_down"><div id="sidebar"><div class="widget"><form class="search-form" action="//www.google.com/search" method="get" accept-charset="utf-8" target="_blank"><input type="text" name="q" maxlength="20" placeholder="Search"/><input type="hidden" name="sitesearch" value="https://github.com/xigang"/></form></div><div class="widget"><div class="widget-title"><i class="fa fa-folder-o"> 分类</i></div></div><div class="widget"><div class="widget-title"><i class="fa fa-star-o"> 标签</i></div><div class="tagcloud"><a href="/tags/kubernetes/" style="font-size: 15px;">kubernetes</a> <a href="/tags/etcd/" style="font-size: 15px;">etcd</a> <a href="/tags/linux/" style="font-size: 15px;">linux</a> <a href="/tags/machine-learning/" style="font-size: 15px;">machine-learning</a> <a href="/tags/nvidia-docker/" style="font-size: 15px;">nvidia-docker</a> <a href="/tags/docker/" style="font-size: 15px;">docker</a> <a href="/tags/microservices/" style="font-size: 15px;">microservices</a></div></div><div class="widget"><div class="widget-title"><i class="fa fa-file-o"> 最近文章</i></div><ul class="post-list"><li class="post-list-item"><a class="post-list-link" href="/2018/09/01/gpu/">GPU Container on Kubernetes</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/08/19/kong/">微服务网关(Kong)与容器服务</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/08/18/etcd-back/">etcd集群备份及容灾恢复</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/07/08/cgroups/">浅谈Cgroups</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/06/30/lxcfs/">使用lxcfs对docker容器隔离</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/06/04/controller-manager/">kube-controller-manaer解析之启动流程</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/19/kubernetes-docker-log/">基于Kubernetes容器云日志采集与处理实践</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/05/cephfs/">kubernetes持久化存储cephfs</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/05/ceph-rbd/">kubernetes持久化存储Ceph RBD</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/05/05/kube-scheduler/">kube-scheduler源码解析</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-external-link"> 友情链接</i></div><ul></ul><a href="http://www.example1.com/" title="site-name1" target="_blank">site-name1</a></div></div></div><div class="pure-u-1 pure-u-md-3-4"><div id="footer">Copyright © 2018 <a href="/." rel="nofollow">xigang's home.</a> Powered by<a rel="nofollow" target="_blank" href="https://hexo.io"> Hexo.</a><a rel="nofollow" target="_blank" href="https://github.com/tufu9441/maupassant-hexo"> Theme</a> by<a rel="nofollow" target="_blank" href="https://github.com/pagecho"> Cho.</a></div></div></div><a class="show" id="rocket" href="#top"></a><script type="text/javascript" src="/js/totop.js?v=0.0.0" async></script><script type="text/javascript" src="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.js" async></script><script type="text/javascript" src="/js/fancybox.js?v=0.0.0" async></script><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.css"><script type="text/javascript" src="/js/codeblock-resizer.js?v=0.0.0"></script><script type="text/javascript" src="/js/smartresize.js?v=0.0.0"></script></div></body></html>
