@@ -37,10 +37,10 @@
 <h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>1.首先通过<code>replicaset controller</code>通过watch api-server获取需要处理replicaset对象的key。<br>2.对replicaset key进行切分，获取namespace和name。<br>3.通过namespace和name获取执行的replicaset对象。<br>4.获取namespace下的所有状态处于<code>ready</code>的pod，并依据<code>match</code>, <code>adopt</code>, <code>release</code>对属于该<code>replicaset</code>下的Pod进行领养。<br>5.根据当前<code>replicaset</code>下的pod与<code>replicaset</code>期望的副本数进行diff,决定是否需要扩缩容pod.<br>6.更新<code>replicaset</code>的状态信息。</p>
 </div><div class="tags"><a href="/tags/kubernetes/">kubernetes</a></div><div class="post-nav"><a class="pre" href="/2018/10/14/namespace-md/">浅谈 Linux Namespace</a><a class="next" href="/2018/09/08/deployment/">Kube-Controller-manager之Deployment Controller源码解析</a></div><div id="container"></div><link rel="stylesheet" href="/css/default.css?v=0.0.0"><script src="/js/gitment.browser.js?v=0.0.0"></script><script>var gitment = new Gitment({
   owner: 'xigang',
-  repo: 'gitment-comments',
+  repo: 'https://github.com/xigang/gitment-comments',
   oauth: {
-    client_id: '2d60ef11fd57f92d32e8',
-    client_secret: '442ad4f0893044ba4eb5447d0d656aa22e8fe93d',
+    client_id: '86d1945e3a9358946043',
+    client_secret: '304f48ee3394ae5dab75d19a966506e170d850f6',
   },
 })
 gitment.render('container')

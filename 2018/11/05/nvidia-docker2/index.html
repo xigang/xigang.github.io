@@ -48,10 +48,10 @@
 <h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>在kubernetes中使用<code>nvidia-docker 1.0</code>的弊端在于，在使用资源对象进行资源创建的时候，需要在配置中将<code>GPU Driver</code>已volume的方式挂载到容器中，这步需要人为的进行干涉。但是使用<code>nvidia-docker 2.0</code>的方式不要在在配置中指定<code>GPU Driver</code>的位置。完全有<code>device plugin</code>来做这件事。方便省事儿。并且kubernetes对外提供了<code>device plugin</code>的接口。也方便各个厂商来对自家的资源实现对k8s的无缝接入。不仅仅是<code>device plugin</code>, kubernetes对容器运行时，也提供了同样的interface的方式，来对外提供对各家运行时的支持。这也就是kubernetes扩展性的强大之处吧。</p>
 </div><div class="tags"><a href="/tags/kubernetes/">kubernetes</a><a href="/tags/docker/">docker</a></div><div class="post-nav"><a class="pre" href="/2018/11/08/nvidia-container-runtime/">深入理解 Nvidia-docker2.0</a><a class="next" href="/2018/10/14/namespace-md/">浅谈 Linux Namespace</a></div><div id="container"></div><link rel="stylesheet" href="/css/default.css?v=0.0.0"><script src="/js/gitment.browser.js?v=0.0.0"></script><script>var gitment = new Gitment({
   owner: 'xigang',
-  repo: 'gitment-comments',
+  repo: 'https://github.com/xigang/gitment-comments',
   oauth: {
-    client_id: '2d60ef11fd57f92d32e8',
-    client_secret: '442ad4f0893044ba4eb5447d0d656aa22e8fe93d',
+    client_id: '86d1945e3a9358946043',
+    client_secret: '304f48ee3394ae5dab75d19a966506e170d850f6',
   },
 })
 gitment.render('container')
