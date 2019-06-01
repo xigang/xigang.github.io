@@ -1,0 +1,97 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description"><title>CGROUPS VERSION 2 | xigang's home</title><link rel="stylesheet" type="text/css" href="/css/style.css?v=0.0.0"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/normalize/8.0.0/normalize.min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/pure-min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/grids-responsive-min.css"><link rel="stylesheet" href="//cdn.bootcss.com/font-awesome/4.7.0/css/font-awesome.min.css"><script type="text/javascript" src="//cdn.bootcss.com/jquery/3.3.1/jquery.min.js"></script><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png"></head><body><div class="body_container"><div id="header"><div class="site-name"><h1 class="hidden">CGROUPS VERSION 2</h1><a id="logo" href="/.">xigang's home</a><p class="description">Do it right or don't do it at all</p></div><div id="nav-menu"><a class="current" href="/."><i class="fa fa-home"> 首页</i></a><a href="/archives/"><i class="fa fa-archive"> 归档</i></a><a href="/about/"><i class="fa fa-user"> 关于</i></a><a href="/atom.xml"><i class="fa fa-rss"> 订阅</i></a></div></div><div class="pure-g" id="layout"><div class="pure-u-1 pure-u-md-3-4"><div class="content_container"><div class="post"><h1 class="post-title">CGROUPS VERSION 2</h1><div class="post-meta">Jun 1, 2019<span> | </span><span class="category"><a href="/categories/Linux/">Linux</a></span><script src="https://dn-lbstatics.qbox.me/busuanzi/2.3/busuanzi.pure.mini.js" async></script><span id="busuanzi_container_page_pv"> | <span id="busuanzi_value_page_pv"></span><span> 阅读</span></span></div><div class="post-content"><p>之前写过一篇文章对<a href="https://xigang.github.io/2018/07/08/cgroups/" target="_blank" rel="noopener">cgroup v1</a>进行了介绍，但是由于当前k8s使用cephfs进行数据存储，当多租户使用时，需要对IO进行限制，当前<code>cgroup v1</code>由于memcg与blkio没有协作，导致buffer io的throttle一直没有实现。并且<code>cgroup v1</code>在内核的实现一直比较混乱，其中主要的原因在于，cgroup为了提供灵活性，允许进程可以属于多个<code>hierarchy</code>的不同的group。但实际上，多个<code>hierarchy</code>并没有太大的用处，因为控制器(controller)只能属于一个<code>hierarchy</code>。 所以在实际使用中，通常是每个<code>hierarchy</code>一个控制器。</p>
+<p>这种多<code>hierarchy</code>除了增加代码的复杂度和理解困难外，并没有太大的用处。一方面，跟踪进程所有controller变得复杂；另外，各个controller之间也很难协同工作（因为controller可能属于不同的hierarchy, 所以从3.16开始，内核开始转向单一层次（unified hierarchy)。并且实现了对buffer io的限制。</p>
+<p>注意:(cgroup v2在kernel 4.5版本已经release)</p>
+<h4 id="Cgroups-v2-介绍"><a href="#Cgroups-v2-介绍" class="headerlink" title="Cgroups v2 介绍"></a>Cgroups v2 介绍</h4><p>由于cgroup v1存在的种种问题，cgroup v2将多<code>hierarchy</code>的方式变成了<code>unified hierarchy</code>。并将所有的controller挂载到一个<code>unified hierarchy</code>。并且当前kernel没有移除从GROUP v1版本,允许cgroup v1和v2啷个版本共存。但是相同的controller不能同时mount到这两个不同的cgroup版本中。</p>
+<p>对cgroup v2的变化,总结如下:</p>
+<ul>
+<li>cgroup v2 中所有的controller都会被挂载到一个<code>unified hierarchy</code>下，不在存在像v1中允许不同的controller挂载到不同的<code>hierarchy</code>的情况。</li>
+<li>Proess只能绑定到cgroup的根(“/“)目录和cgroup目录树中的叶子节点。</li>
+<li>通过<code>cgroup.controllers</code>和<code>cgroup.subtree_control</code>指定哪些controller可以被使用。</li>
+<li>v1版本中的<code>task</code>文件和cpuset controller中的<code>cgroup.clone_children</code>文件被移除。</li>
+<li>当cgroup为空时的通知机制得到改进，通过<code>cgroup.events</code>文件通知。</li>
+</ul>
+<p>更多关于cgroup v2的介绍请查看文档<a href="http://man7.org/linux/man-pages/man7/cgroups.7.html" target="_blank" rel="noopener">cgroup v2</a></p>
+<h4 id="Cgroups-v2-unified-hierarchy"><a href="#Cgroups-v2-unified-hierarchy" class="headerlink" title="Cgroups v2 unified hierarchy"></a>Cgroups v2 unified hierarchy</h4><p>在cgroup v1允许将不同的controller挂载到不同的<code>hierarchies</code>,这种方式很灵活，但是实际上这种方式基本对于使用者来说是没有必要的。因此, 在cgroup v2版本中，将所有的controller都挂载到一个<code>hierarchies</code>。</p>
+<p>使用下面命令将cgroup v2挂载到文件系统，并且所有可用的controller会自动被挂载进去。</p>
+<figure class="highlight nginx"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="attribute">mount</span> -t cgroup2 <span class="literal">none</span> <span class="variable">$MOUNT_POINT</span></span><br></pre></td></tr></table></figure>
+<p>cgroup v2可以使用的controller必须没有被cgroup v1使用。如果想在cgroup v2使用已经被cgroup v1使用的controller，则需要将cgroup v1已经挂载的controller umount掉之后，才能在v2中使用。</p>
+<p>还有值得关注的是，系统boot时，systemd默认使用cgroup v1，并将可以使用的controller mount到<code>/sys/fs/cgroup</code>。如果想在系统boot时，把cgroup v1关掉，可以在<code>/etc/default/grub</code>文件下修改kernel参数,增加<code>GRUB_CMDLINE_LINUX_DEFAULT=&quot;cgroup_no_v1=all&quot;</code>。(注意: all表示关闭所有的controller，如果想关闭指定的controller，则将all替换成你需要的controller名称，并已逗号分隔即可)。这样就可以在cgroup v2中使用你想要的controller了。</p>
+<h4 id="Cgroups-v2-controllers"><a href="#Cgroups-v2-controllers" class="headerlink" title="Cgroups v2 controllers"></a>Cgroups v2 controllers</h4><p>cgroup v2当前支持的controller:</p>
+<ul>
+<li><p>io （since Linux 4.5）</p>
+<p>  This is the successor of the version 1 blkio controller.</p>
+</li>
+<li><p>memory (since Linux 4.5)</p>
+<p>  This is the successor of the version 1 memory controller.</p>
+</li>
+<li><p>pids （since Linux 4.5）</p>
+<p>  This is the same as the version 1 pids controller.</p>
+</li>
+<li><p>perf_event (since Linux 4.11)</p>
+<p> This is the same as the version 1 perf_event controller.</p>
+</li>
+<li><p>rdma (since Linux 4.11)</p>
+<p>  This is the same as the version 1 rdma controller.</p>
+</li>
+<li><p>cpu (since Linux 4.15)</p>
+<p>  This is the successor to the version 1 cpu and cpuacct controllers.</p>
+</li>
+</ul>
+<h4 id="Cgroups-v2-subtree-control"><a href="#Cgroups-v2-subtree-control" class="headerlink" title="Cgroups v2 subtree control"></a>Cgroups v2 subtree control</h4><p>在<code>hierarchy</code>下的每一个group中逗都会包含如下两个文件:</p>
+<ul>
+<li><p>cgroup.controllers</p>
+<p>  这是一个read-only文件。包含了该cgroup下所有可用的controllers.</p>
+</li>
+<li><p>cgroup.subtree_control</p>
+<p>  这个文件中包含了该cgroup下已经被开启的controllers。 并且<code>cgroup.subtree_control</code>中包含的controllers是<code>cgroup.controllers</code>文件controller的子集。</p>
+</li>
+</ul>
+<p>cgroup.subtree_control文件内容格式如下,controller之间使用空格间隔，前面用”+”表示启用,使用”-“表示停用。比如下面的例子:</p>
+<figure class="highlight awk"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">echo <span class="string">'+pids -memory'</span> &gt; x<span class="regexp">/y/</span>cgroup.subtree_control</span><br></pre></td></tr></table></figure>
+<p>cgroup v2的具体组织结构如下图所示:</p>
+<p><div align="left"><br><img src="http://p1.qhimg.com/t01ba8513f0d6685aa0.png" width="1000" height="490" alt="image from:https://faxaing'qingcebookmicrosites.github.io/cgroup2/docs/create-cgroups.html"></div></p>
+<h4 id="Cgroups-v2-“no-internal-processes”-rule"><a href="#Cgroups-v2-“no-internal-processes”-rule" class="headerlink" title="Cgroups v2 “no internal processes” rule"></a>Cgroups v2 “no internal processes” rule</h4><p>与cgrop v1不同, cgroup v2只能attach process到叶子节点。因此你不能attach process到任何一个已开启controller的任何subgroup中。这么做原因是:</p>
+<figure class="highlight routeros"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">The reason behind this rule is that processes <span class="keyword">in</span> a given subgroup competing <span class="keyword">for</span> resources with threads attached <span class="keyword">to</span> its parent<span class="built_in"> group </span>create significant implementation difficulties.</span><br></pre></td></tr></table></figure>
+<p><div align="left"><br><img src="http://p9.qhimg.com/t018dcfed48b3406573.png" width="1000" height="490" alt="image from:https://events.static.linuxfound.org/sites/events/files/slides/cgroup_and_namespaces.pdf"></div></p>
+<h4 id="Cgroups-v2-cgroup-events-file"><a href="#Cgroups-v2-cgroup-events-file" class="headerlink" title="Cgroups v2 cgroup.events file"></a>Cgroups v2 cgroup.events file</h4><p>在cgroup v2的实现中，也对获取group empty时获取通知的机制进行了优化。</p>
+<p>cgroup v1使用<code>release_agent</code>和<code>notify_on_release</code>在v2中被移除。替代的是使用了<code>cgroup.events</code>文件。这是一个只读的文件，每行一个key value对，key和value之间通过空格分割。</p>
+<p>当前在这个文件中只含有一个key就是populated对应的value是0. 0表示cgroup中没有process。1表示cgroup中包含process。</p>
+<h4 id="Cgroups-v2-cgroup-stat-file"><a href="#Cgroups-v2-cgroup-stat-file" class="headerlink" title="Cgroups v2 cgroup.stat file"></a>Cgroups v2 cgroup.stat file</h4><p>在cgroup v2 hierarchy下的每个group都会包含一个只读文件<code>cgroup.stat</code>。它的内容也是<code>key-value</code>的形式。当前这个文件中包含如下两个key；</p>
+<ul>
+<li><p>nr_descendants</p>
+<p>  表示cgroup中存活的subgroup的数量</p>
+</li>
+<li><p>nr_dying_descendants</p>
+<p>  表示cgroup中已经死亡的cgroup的数量</p>
+</li>
+</ul>
+<h4 id="Limiting-the-number-of-descendant-cgroups"><a href="#Limiting-the-number-of-descendant-cgroups" class="headerlink" title="Limiting the number of descendant cgroups"></a>Limiting the number of descendant cgroups</h4><p>在cgroup v2 hierarchy还包含了两个用于查看和设置该cgroup下的后代cgroup数量的限制文件:</p>
+<ul>
+<li><p>cgroup.max.depth (since Linux 4.14)</p>
+<p>  这个文件定义子cgroup的最大深度。<code>0</code>意味着不能创建cgroup. 如果尝试创建cgroup,会报<code>EAGAIN</code>错误 <code>max</code>表示没有限制,默认值是<code>max</code>。</p>
+</li>
+<li><p>cgroup.max.descendants (since Linux 4.14)</p>
+<p>  当前可以创建的活跃cgroup目录的最大数量，默认值”max”表示不限制。超过限制，返回EAGAIN。</p>
+</li>
+</ul>
+<h4 id="CGROUPS-VERSION-2-THREAD-MODE"><a href="#CGROUPS-VERSION-2-THREAD-MODE" class="headerlink" title="CGROUPS VERSION 2 THREAD MODE"></a>CGROUPS VERSION 2 THREAD MODE</h4><p>请参考:<a href="http://man7.org/linux/man-pages/man7/cgroups.7.html" target="_blank" rel="noopener">http://man7.org/linux/man-pages/man7/cgroups.7.html</a></p>
+<h4 id="当前存在的问题"><a href="#当前存在的问题" class="headerlink" title="当前存在的问题"></a>当前存在的问题</h4><p>当前docker只支持cgroup v1,由于种种原因导致社区一直没有对cgroup v2版本的支持，详细内容请看:<br><a href="https://github.com/opencontainers/runc/issues/654">https://github.com/opencontainers/runc/issues/654</a></p>
+<h4 id="比较好的资料"><a href="#比较好的资料" class="headerlink" title="比较好的资料"></a>比较好的资料</h4><ul>
+<li><a href="http://man7.org/linux/man-pages/man7/cgroups.7.html" target="_blank" rel="noopener">http://man7.org/linux/man-pages/man7/cgroups.7.html</a></li>
+<li><a href="https://facebookmicrosites.github.io/cgroup2/docs/create-cgroups.html" target="_blank" rel="noopener">https://facebookmicrosites.github.io/cgroup2/docs/create-cgroups.html</a></li>
+<li><a href="https://events.static.linuxfound.org/sites/events/files/slides/cgroup_and_namespaces.pdf" target="_blank" rel="noopener">https://events.static.linuxfound.org/sites/events/files/slides/cgroup_and_namespaces.pdf</a></li>
+<li><a href="https://lwn.net/Articles/679786/" target="_blank" rel="noopener">https://lwn.net/Articles/679786/</a></li>
+<li><a href="https://www.lijiaocn.com/%E6%8A%80%E5%B7%A7/2019/01/28/linux-tool-cgroup-detail.html" target="_blank" rel="noopener">https://www.lijiaocn.com/%E6%8A%80%E5%B7%A7/2019/01/28/linux-tool-cgroup-detail.html</a>    </li>
+</ul>
+<p>Happy Children’s Day, hahahaha :)</p>
+</div><div class="tags"><a href="/tags/Linux/">Linux</a><a href="/tags/cgroup/">cgroup</a><a href="/tags/kernel/">kernel</a></div><div class="post-nav"><a class="next" href="/2019/05/11/bosun/">Prometheus基于Bosun框架进行告警</a></div><div id="container"></div><link rel="stylesheet" type="text/css" href="//unpkg.com/gitalk/dist/gitalk.css?v=0.0.0"><script type="text/javascript" src="//cdn.bootcss.com/blueimp-md5/2.10.0/js/md5.js?v=0.0.0"></script><script type="text/javascript" src="//unpkg.com/gitalk/dist/gitalk.min.js?v=0.0.0"></script><script>var gitalk = new Gitalk({
+  clientID: '86d1945e3a9358946043',
+  clientSecret: '304f48ee3394ae5dab75d19a966506e170d850f6',
+  repo: 'xigang.github.io',
+  owner: 'xigang',
+  admin: ['xigang'],
+  id: md5(location.pathname),
+  distractionFreeMode: false
+})
+gitalk.render('container')
+</script></div></div></div><div class="pure-u-1-4 hidden_mid_and_down"><div id="sidebar"><div class="widget"><form class="search-form" action="//www.baidu.com/baidu" method="get" accept-charset="utf-8" target="_blank"><input type="search" name="word" maxlength="20" placeholder="Search"/><input type="hidden" name="si" value="https://github.com/xigang"/><input name="tn" type="hidden" value="bds"/><input name="cl" type="hidden" value="3"/><input name="ct" type="hidden" value="2097152"/><input name="s" type="hidden" value="on"/></form></div><div class="widget"><div class="widget-title"><i class="fa fa-folder-o"> 分类</i></div><ul class="category-list"><li class="category-list-item"><a class="category-list-link" href="/categories/Linux/">Linux</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/docker/">docker</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/etcd/">etcd</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/kubernetes/">kubernetes</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/microservices/">microservices</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/日志监控/">日志监控</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/机器学习/">机器学习</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-star-o"> 标签</i></div><div class="tagcloud"><a href="/tags/etcd/" style="font-size: 15px;">etcd</a> <a href="/tags/kubernetes/" style="font-size: 15px;">kubernetes</a> <a href="/tags/kapacitor/" style="font-size: 15px;">kapacitor</a> <a href="/tags/alertmanager/" style="font-size: 15px;">alertmanager</a> <a href="/tags/bosun/" style="font-size: 15px;">bosun</a> <a href="/tags/ceph/" style="font-size: 15px;">ceph</a> <a href="/tags/Linux/" style="font-size: 15px;">Linux</a> <a href="/tags/cgroup/" style="font-size: 15px;">cgroup</a> <a href="/tags/prometheus/" style="font-size: 15px;">prometheus</a> <a href="/tags/kubeflow/" style="font-size: 15px;">kubeflow</a> <a href="/tags/scheduler/" style="font-size: 15px;">scheduler</a> <a href="/tags/docker/" style="font-size: 15px;">docker</a> <a href="/tags/microservices/" style="font-size: 15px;">microservices</a> <a href="/tags/mxnet/" style="font-size: 15px;">mxnet</a> <a href="/tags/tensorflow/" style="font-size: 15px;">tensorflow</a> <a href="/tags/kernel/" style="font-size: 15px;">kernel</a></div></div><div class="widget"><div class="widget-title"><i class="fa fa-file-o"> 最近文章</i></div><ul class="post-list"><li class="post-list-item"><a class="post-list-link" href="/2019/06/01/cgroupv2/">CGROUPS VERSION 2</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/05/11/bosun/">Prometheus基于Bosun框架进行告警</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/04/09/container-resource-metrics/">A Deep Dive Into Kubernetes Metrics - Container Resource Metrics</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/03/15/metrics-servere/">Kubernetes Metrics-Server介绍及源码分析</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/02/17/gang-scheduler/">适合AI场景的调度器 - Gang-Schedule</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/01/30/tensorflow/">Tensorflow结合kubeflow进行分布式训练</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/01/17/mxnet/">MXNet结合kubeflow进行分布式训练</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/12/31/Orphaned-pod/">定位 Orphaned Pod Found - but Volume Paths Are Still Present on Disk 问题</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/12/14/prometheus/">记一次InfoQ采访 <<360容器平台监控实践>></a></li><li class="post-list-item"><a class="post-list-link" href="/2018/12/08/kubeflow-intro/">Kubeflow使用Kubernetes进行机器学习</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-external-link"> 友情链接</i></div><ul></ul><a href="http://gogap.cn/" title="gogap" target="_blank">gogap</a><ul></ul><a href="http://www.0x7c00.net/" title="31744" target="_blank">31744</a><ul></ul><a href="https://www.opsdev.cn/" title="360opsdev" target="_blank">360opsdev</a></div></div></div><div class="pure-u-1 pure-u-md-3-4"><div id="footer">Copyright © 2019 <a href="/." rel="nofollow">xigang's home.</a> Powered by<a rel="nofollow" target="_blank" href="https://hexo.io"> Hexo.</a><a rel="nofollow" target="_blank" href="https://github.com/tufu9441/maupassant-hexo"> Theme</a> by<a rel="nofollow" target="_blank" href="https://github.com/pagecho"> Cho.</a></div></div></div><a class="show" id="rocket" href="#top"></a><script type="text/javascript" src="/js/totop.js?v=0.0.0" async></script><script type="text/javascript" src="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.js" async></script><script type="text/javascript" src="/js/fancybox.js?v=0.0.0" async></script><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.css"><script type="text/javascript" src="/js/codeblock-resizer.js?v=0.0.0"></script><script type="text/javascript" src="/js/smartresize.js?v=0.0.0"></script></div></body></html>
