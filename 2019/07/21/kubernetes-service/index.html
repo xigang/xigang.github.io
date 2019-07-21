@@ -1,0 +1,148 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description"><title>浅谈Kubernetes Service负载均衡实现机制 | xigang's home</title><link rel="stylesheet" type="text/css" href="/css/style.css?v=0.0.0"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/normalize/8.0.0/normalize.min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/pure-min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/grids-responsive-min.css"><link rel="stylesheet" href="//cdn.bootcss.com/font-awesome/4.7.0/css/font-awesome.min.css"><script type="text/javascript" src="//cdn.bootcss.com/jquery/3.3.1/jquery.min.js"></script><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png"></head><body><div class="body_container"><div id="header"><div class="site-name"><h1 class="hidden">浅谈Kubernetes Service负载均衡实现机制</h1><a id="logo" href="/.">xigang's home</a><p class="description">Do it right or don't do it at all</p></div><div id="nav-menu"><a class="current" href="/."><i class="fa fa-home"> 首页</i></a><a href="/archives/"><i class="fa fa-archive"> 归档</i></a><a href="/about/"><i class="fa fa-user"> 关于</i></a><a href="/atom.xml"><i class="fa fa-rss"> 订阅</i></a></div></div><div class="pure-g" id="layout"><div class="pure-u-1 pure-u-md-3-4"><div class="content_container"><div class="post"><h1 class="post-title">浅谈Kubernetes Service负载均衡实现机制</h1><div class="post-meta">Jul 21, 2019<span> | </span><span class="category"><a href="/categories/kubernetes/">kubernetes</a></span><script src="https://dn-lbstatics.qbox.me/busuanzi/2.3/busuanzi.pure.mini.js" async></script><span id="busuanzi_container_page_pv"> | <span id="busuanzi_value_page_pv"></span><span> 阅读</span></span></div><div class="post-content"><p>Kubernetes Serivce是一组具有相同label Pod集合的抽象(可以简单的理解为集群内的LB)，集群内外的各个服务可以通过Service进行互相通信。但是Service的类型有多种，每种类型的Service适合怎样的场景以及kube-proxy是如何实现Service负载均衡的将是本文讨论的重点。</p>
+<h3 id="Service和kube-proxy在kubernetes集群中的工作原理"><a href="#Service和kube-proxy在kubernetes集群中的工作原理" class="headerlink" title="Service和kube-proxy在kubernetes集群中的工作原理"></a>Service和kube-proxy在kubernetes集群中的工作原理</h3><p>在介绍Service和kube-proxy之前，先绍下它们在Kubernetes集群中所起到的作用，我觉得很有必要。</p>
+<div align="left"><br><img src="http://p7.qhimg.com/t01673ead2f65bc43c8.png" width="800" height="450" alt="service"><br></div>
+
+
+<p>让我们分析下上面这张图:</p>
+<ol>
+<li>运行在每个Node节点的kube-proxy会实时的watch <a href="https://kubernetes.io/docs/concepts/services-networking/service/" target="_blank" rel="noopener">Services</a>和 Endpoints对象。</li>
+</ol>
+<p>当用户在kubernetes集群中创建了含有label的Service之后，同时会在集群中创建出一个同名的Endpoints对象，用于存储该Service下的Pod IP. 它们的关系如下图所示:</p>
+<div align="left"><br><img src="http://p9.qhimg.com/t0100db7623fd0a3020.png" width="800" height="300" alt="service"><br></div>
+
+<p>2.每个运行在Node节点的kube-proxy感知到Services和Endpoints的变化之后，会在各自的Node节点设置相关的iptables或IPVS规则，用于之后用户通过Service的ClusterIP去访问该Service下的服务。</p>
+<p>3.当kube-proxy把需要的规则设置完成之后，用户便可以在集群内的Node或客户端Pod上通过ClusterIP经过iptables或IPVS设置的规则进行路由和转发，最终将客户端请求发送到真实的后端Pod。</p>
+<p>对于kube-proxy如何设置Iptables和IPVS策略后续会讲。接下来先介绍下每种不同类型的Service的使用场景。</p>
+<h3 id="Service-类型"><a href="#Service-类型" class="headerlink" title="Service 类型"></a>Service 类型</h3><p>当前Kubernetes Service支持如下几种类型，并在介绍类型的同时便可以了解每种类型的Service的具体使用场景。</p>
+<h5 id="ClusterIP"><a href="#ClusterIP" class="headerlink" title="ClusterIP"></a>ClusterIP</h5><p>ClusterIP类型的Service是Kubernetes集群默认的Service, 它只能用于集群内部通信。不能用于外部通信。</p>
+<p>ClusterIP Service类型的结构如下图所示:</p>
+<div align="left"><br><img src="http://p4.qhimg.com/t017914bb8fc373b124.png" width="600" height="500" alt="service"><br></div>
+
+<h5 id="NodePort"><a href="#NodePort" class="headerlink" title="NodePort"></a>NodePort</h5><p>如果你想要在集群外访问集群内部的服务，你可以使用这种类型的Service。NodePort类型的Service会在集群内部的所有Node节点打开一个指定的端口。之后所有的流量直接发送到这个端口之后，就会转发的Service去对真实的服务进行访问。</p>
+<p>NodePort Service类型的结构如下图所示:</p>
+<div align="left"><br><img src="http://p7.qhimg.com/t01f56cc8b2ad54ca17.png" width="600" height="500" alt="service"><br></div>
+
+<h5 id="LoadBalancer"><a href="#LoadBalancer" class="headerlink" title="LoadBalancer"></a>LoadBalancer</h5><p>LoadBalancer类型的Service通常和云厂商的LB结合一起使用，用于将集群内部的服务暴露到外网，云厂商的LoadBalancer会给用户分配一个IP,之后通过该IP的流量会转发到你的Service.</p>
+<p>LoadBalancer Service类型的结构如下图所示:</p>
+<div align="left"><br><img src="http://p2.qhimg.com/t014b50d4880ac7c06e.png" width="600" height="500" alt="service"><br></div>
+
+<h5 id="Ingress"><a href="#Ingress" class="headerlink" title="Ingress"></a>Ingress</h5><p>Ingress 其实不是Service的一个类型，但是它可以作用于多个Service，作为集群内部服务的入口。<br>Ingress 能做许多不同的事，比如根据不同的路由，将请求转发到不同的Service上等等。</p>
+<p>Ingress 的结构如下图所示:</p>
+<div align="left"><br><img src="http://p0.qhimg.com/t01de447c77ad226691.png" width="600" height="450" alt="service"><br></div>
+
+
+<h3 id="Service-服务发现"><a href="#Service-服务发现" class="headerlink" title="Service 服务发现"></a>Service 服务发现</h3><p>Service当前支持两种类型的服务发现机制，一种是通过环境变量，另一种是通过DNS。在这两种方案中，建议使用后者。</p>
+<h5 id="环境变量"><a href="#环境变量" class="headerlink" title="环境变量"></a>环境变量</h5><p>当一个Pod创建完成之后，kubelet会在该Pod中注册该集群已经创建的所有Service相关的环境变量，但是需要注意的是，Service创建之前的所有的POD是不会注册该Service的环境变量的，所以在平时使用时，建议通过DNS的方式进行Service之间的服务发现。</p>
+<h5 id="DNS"><a href="#DNS" class="headerlink" title="DNS"></a>DNS</h5><p>可以在集群中部署<a href="https://coredns.io/" target="_blank" rel="noopener">CoreDNS</a>服务(旧版本的kubernetes集群使用的是kubeDNS)， 来达到集群内部的Pod通过DNS的方式进行集群内部各个服务之间的通讯。</p>
+<p>当前kubernetes集群默认使用CoreDNS作为默认的DNS服务，主要原因是CoreDNS是基于Plugin的方式进行扩展的简单，灵活。并且不完全被Kubernetes所捆绑。</p>
+<h3 id="Service-负载均衡"><a href="#Service-负载均衡" class="headerlink" title="Service 负载均衡"></a>Service 负载均衡</h3><p>在本文的最初已经介绍了service和kube-proxy在集群中是如何配合来达到服务的负载均衡。kube-proxy在其中起到了关键性的作用，kube-proxy作为一个控制器，作为k8s和Linux kernel Netfilter交互的一个枢纽。监听kubernetes集群Services和Endpoints对象的变化，并根据kube-proxy不同的模式(iptables or ipvs), 对内核设置不同的规则，来实现路由转发。接下来分别介绍下kube-proxy基于Iptables和IPVS两种模式实现Service负载均衡的工作机制。</p>
+<h5 id="Iptables-实现负载均衡"><a href="#Iptables-实现负载均衡" class="headerlink" title="Iptables 实现负载均衡"></a>Iptables 实现负载均衡</h5><p><a href="https://wiki.archlinux.org/index.php/Iptables_(%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87" target="_blank" rel="noopener">Iptables</a>)是一个用户态程序，通过配置Netfilter规则来构建Linux内核防火墙。Netfilter是Linux内核的网络包管理框架，提供了一整套的hook函数的管理机制，使得诸如数据包过滤，网络地址转换(NAT)和基于协议类型的连接跟踪成为了可能，Netfilter在内核中的位置如下图所示。</p>
+<div align="left"><br><img src="http://p3.qhimg.com/t0164fba432ca000385.png" width="600" height="450" alt="service"><br></div>
+
+<p>本文不会更多的介绍关于Iptales和Netfilter的细节，如果想更多的了解请查看:<a href="https://wiki.archlinux.org/index.php/Iptables_(%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87" target="_blank" rel="noopener">Iptables</a>)和 <a href="http://blog.chinaunix.net/uid-23069658-id-3160506.html" target="_blank" rel="noopener">什么是Netfilter</a></p>
+<p>接下来介绍kube-proxy是如何利用Iptables做负载均衡的。数据包在Iptables中的匹配流程如下图所示:</p>
+<div align="left"><br><img src="http://p3.qhimg.com/t0129e1b9ad490ba0ba.png" width="750" height="340" alt="service"><br></div><br>在Iptables模式下，kube-proxy通过在目标node节点上的Iptables中的NAT表的PREROUTIN和POSTROUTING链中创建一系列的自定义链(这些自定义链主要是”KUBE-SERVICE”链， “KUBE-POSTROUTING”链，每个服务对应的”KUBE-SVC-XXXXXX”链和”KUBE-SEP-XXXX”链)，然后通过这些自定义链对流经到该Node的数据包做DNAT和SNAT操作从而实现路由，负载均衡和地址转化，如下图所示:<br><div align="left"><br><img src="http://p6.qhimg.com/t016827fa7b83bff536.jpg" width="800" height="600" alt="service"><br></div>
+
+<p>kube-proxy中，客户端的请求数据包在Iptables规则中具体的匹配过程为:</p>
+<p>1.PREROUTING链或者OUTPUT链(集群内的Pod通过clusterIP访问Service时经过OUTPUT链， 而当集群外主机通过NodePort方式访问Service时，通过PREROUTING链，两个链都会跳转到KUBE-SERVICE链)</p>
+<div align="left"><br><img src="http://p1.qhimg.com/t01294fe42ea7cd63e8.png" width="800" height="80" alt="service"><br></div>
+
+<div align="left"><br><img src="http://p3.qhimg.com/t01d4bde285bbe35404.png" width="800" height="80" alt="service"><br></div>
+
+<p>2.KUBE-SERVICES链(每一个Service所暴露的每一个端口在KUBE-SERVICES链中都会对应一条相应的规则，当Service的数量达到一定规模时，KUBE-SERVICES链中的规则的数据将会非常的大，而Iptables在进行查找匹配时是线性查找，这将耗费很长时间,时间复杂度O(n))。</p>
+<div align="left"><br><img src="http://p1.qhimg.com/t014b81d7a96aad3f8b.png" width="800" height="210" alt="service"><br></div>
+
+<p>3.KUBE-SVC-XXXXX链 (在KUBE-SVC-XXXXX链中(后面那串 hash 值由 Service 的虚 IP 生成)，会以一定的概率匹配下面的某一条规则执行，通过statistic模块为每个后端设置权重，已实现负载均衡的目的，每个KUBE-SEP-XXXXX链代表Service后面的一个具体的Pod(后面那串 hash 值由后端 Pod 实际 IP 生成),这样便实现了负载均衡的目的)</p>
+<div align="left"><br><img src="http://p2.qhimg.com/t012d09a356134ce6f2.png" width="800" height="170" alt="service"><br></div>
+
+<p>4.KUBE-SEP-XXXX链 (通过DNAT，将数据包的目的IP修改为服务端的Pod IP)</p>
+<div align="left"><br><img src="http://p6.qhimg.com/t01e4106ce2258112d8.png" width="800" height="80" alt="service"><br></div>
+
+<p>5.POSTROUTING链</p>
+<div align="left"><br><img src="http://p2.qhimg.com/t01e6696f4739c56c35.png" width="800" height="50" alt="service"><br></div>
+
+<p>6.KUBE_POSTROUTING链 (对标记的数据包做SNAT)</p>
+<div align="left"><br><img src="http://p3.qhimg.com/t01ed42187e758061f3.png" width="800" height="80" alt="service"><br></div>
+
+<p>通过上面的这个设置便实现了基于Iptables实现了负载均衡。但是Iptbles做负载均衡存在一些问题:</p>
+<ul>
+<li>规则线性匹配时延:<br>KUBE-SERVICES链挂了一长串KUBE-SVC-*链,访问每个service,要遍历每条链直到匹配，时间复杂度O(N)</li>
+<li>规则更新时延:<br>非增量式,需要先iptables-save拷贝Iptables状态，然后再更新部分规则，最后再通过 iptables-restore写入到内核。当规则数到达一定程度时，这个过程就会变得非常缓慢。</li>
+<li>可扩展性:<br>当系统存在大量的Iptables规则链时，增加/删除规则会出现kernel lock,这时只能等待。</li>
+<li>可用性: 服务扩容/缩容时， Iptables规则的刷新会导致连接断开，服务不可用。</li>
+</ul>
+<p>为了解决Iptables当前存在的这些问题，华为开源团队的同学为社区贡献了IPVS模式，接下来介绍下IPVS是如何实现负载均衡的。</p>
+<h5 id="IPVS-实现负载均衡"><a href="#IPVS-实现负载均衡" class="headerlink" title="IPVS 实现负载均衡"></a>IPVS 实现负载均衡</h5><p><a href="http://www.linuxvirtualserver.org/software/ipvs.html" target="_blank" rel="noopener">IPVS</a>是<a href="http://www.linuxvirtualserver.org/" target="_blank" rel="noopener">LVS</a>项目的一部分，是一款运行在Linux kernel当中的4层负载均衡器,性能异常优秀。使用调优后的内核，可以轻松处理每秒10万次以上的转发请求。</p>
+<p>IPVS具有以下特点:</p>
+<ul>
+<li>传输层Load Balancer, LVS负载均衡器的实现。</li>
+<li>与Iptables同样基于Netfilter, 但是使用的是hash表。</li>
+<li>支持TCP, UDP, SCTP协议，支持IPV4, IPV6。</li>
+<li>支持多种负载均衡策略: <ul>
+<li>rr: round-robin</li>
+<li>lc: least connection</li>
+<li>dh: destination hashing</li>
+<li>sh: source hashing</li>
+<li>sed: shortest expected delay</li>
+<li>nq: never queue</li>
+</ul>
+</li>
+<li>支持会话保持</li>
+</ul>
+<p>LVS的工作原理如下图所示:</p>
+<div align="left"><br><img src="http://p8.qhimg.com/t016327b2b4d0745aac.png" width="640" height="350" alt="service"><br></div>
+
+<p>1.当客户端的请求到达负载均衡器的内核空间时，首先会达到PREROUTING链。<br>2.当内核发现请求的数据包的目的地址是本机时，将数据包送往INPUT链。<br>3.当数据包达到INPUT链时， 首先会被IPVS检查，如果数据包里面的目的地址及端口没有在IPVS规则里面，则这条数据包将被放行至用户空间。<br>4.如果数据包里面的目的地址和端口在IPVS规则里面，那么这条数据报文的目的地址会被修改为通过负责均衡算法选好的后后端服务器(DNAT),并发往POSROUTING链。<br>5.最后经由POSTROUTING链发往后端的服务器。</p>
+<p>LVS主要由三种工作模式, 分别是NAT DR, Tunnel模式，而在kube-proxy中，IPVS工作在NAT模式，所以下面主要对NAT模式进行介绍:</p>
+<p>还是分析上面的那种图:</p>
+<ol>
+<li>客户端将请求发往前端的负载均衡器，请求报文源地址是CIP(客户端IP), 目的地址是VIP(负载均衡器前端地址)</li>
+<li>负载均衡器收到报文之后，发现请求的是在规则里面存在的地址，那么它将请求的报文的目的地址改为后端服务器的RIP地址，并将报文根据响应的负责均衡策略发送出去。</li>
+<li>报文发送到Real Server后，由于报文的目的地址是自己，所有会响应请求，并将响应的报文返回给LVS。</li>
+<li>然后LVS将此报文的源地址修改本机的IP地址并发送给客户端。</li>
+</ol>
+<p>介绍完基本的工作原理之后，下面我们看看如何在kube-proxy中使用IPVS模式进行负载均衡。</p>
+<p>首先需要在启动kube-proxy的参数中指定如下参数:</p>
+<figure class="highlight haml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">-<span class="ruby">-proxy-mode=ipvs /<span class="regexp">/将kube-proxy的模式设置为IPVS</span></span></span><br><span class="line"><span class="ruby"></span></span><br><span class="line"><span class="ruby">--ipvs-scheduler=rr /<span class="regexp">/设置ipvs的负载均衡算法，默认是rr</span></span></span><br><span class="line"><span class="ruby"></span></span><br><span class="line"><span class="ruby">--ipvs-min-sync-period=<span class="number">5</span>s /<span class="regexp">/ 刷新IPVS规则的最小时间间隔</span></span></span><br><span class="line"><span class="ruby"></span></span><br><span class="line"><span class="ruby">--ipvs-sync-period=<span class="number">30</span>s /<span class="regexp">/ 刷新IPVS规则的最大时间间隔</span></span></span><br></pre></td></tr></table></figure>
+<p>设置完这些参数之后，重启启动kube-proxy服务即可。当创建ClusterIP类型的Service时，IPVS模式的kube-proxy会做下面几件事儿:</p>
+<ul>
+<li>创建虚拟网卡,默认是kube-ipvs0。</li>
+<li>绑定service IP地址到虚拟网卡kube-ipvs0.</li>
+</ul>
+<div align="left"><br><img src="http://p1.qhimg.com/t0161c3b06e0fc97a10.png" width="640" height="180" alt="service"><br></div>
+
+<ul>
+<li>为每一个Service IP地址创建IPVS虚拟服务器</li>
+</ul>
+<div align="left"><br><img src="http://p2.qhimg.com/t011cd001518d4e06f3.png" width="640" height="80" alt="service"><br></div>
+
+<p>同时IPVS还支持会话保持功能，通过在创建Srevice对象时，指定<code>service.spec.sessionAffinity</code>参数为<code>ClusterIP</code>默认是<code>None</code> 和 指定<code>service.spec.sessionAffinityConfig.clientIP.timeoutSeconds</code>参数为需要的时间,默认是<code>10800s</code>。</p>
+<p>下面是一个创建Service，指定会话保持的一个具体的例子:</p>
+<figure class="highlight less"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="attribute">kind</span>: Service</span><br><span class="line"><span class="attribute">apiVersion</span>: v1</span><br><span class="line"><span class="attribute">metadata</span>:</span><br><span class="line">  <span class="attribute">name</span>: nginx-service</span><br><span class="line"><span class="attribute">spec</span>:</span><br><span class="line">  <span class="attribute">type</span>: ClusterIP</span><br><span class="line">  <span class="attribute">selector</span>:</span><br><span class="line">    <span class="attribute">app</span>: nginx</span><br><span class="line">  <span class="attribute">sessionAffinity</span>: ClientIP</span><br><span class="line">  <span class="attribute">sessionAffinityConfig</span>:</span><br><span class="line">    <span class="attribute">clientIP</span>:</span><br><span class="line">      <span class="attribute">timeoutSeconds</span>: <span class="number">50</span></span><br><span class="line">  <span class="attribute">ports</span>:</span><br><span class="line">  <span class="attribute">-name</span>: http</span><br><span class="line">   <span class="attribute">protocol</span>: TCP</span><br><span class="line">   <span class="attribute">port</span>: <span class="number">80</span></span><br><span class="line">   <span class="attribute">targetPort</span>: <span class="number">80</span></span><br></pre></td></tr></table></figure>
+<p>之后通过<code>ipvsadm -L</code>即可查看会话保持功能是否设置成功。</p>
+<div align="left"><br><img src="http://p7.qhimg.com/t0195eef8151bc1b5c4.png" width="640" height="50" alt="service"><br></div>
+
+<p>这样kube-proxy便可以通过IPVS的模式实现负载均衡。</p>
+<h3 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h3><p>kube-proxy在使用iptables和ipvs实现对Service的负载均衡，但是通过iptables的实现方式，由于Iptables本身的特性，新增规则，更新规则是非增量式的，需要先iptables-save然后在内存中更新规则，在内核中修改规则,在iptables-restore，并且Iptables在进行规则查找匹配时是线性查找，这将耗费很长时间,时间复杂度O(n)。而使用IPVS的实现方式,其连接过程的时间复杂度是O(1)。基本就是说连接的效率与集群Service的数量是无关的。因此随着集群内部Service的不断增加，IPVS的性能优势就体现出来了。哈哈</p>
+<h3 id="参考"><a href="#参考" class="headerlink" title="参考"></a>参考</h3><ul>
+<li><a href="https://zhuanlan.zhihu.com/p/37230013" target="_blank" rel="noopener">https://zhuanlan.zhihu.com/p/37230013</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/39909011" target="_blank" rel="noopener">https://zhuanlan.zhihu.com/p/39909011</a></li>
+<li><a href="https://www.projectcalico.org/comparing-kube-proxy-modes-iptables-or-ipvs/" target="_blank" rel="noopener">https://www.projectcalico.org/comparing-kube-proxy-modes-iptables-or-ipvs/</a></li>
+<li><a href="https://medium.com/google-cloud/kubernetes-nodeport-vs-loadbalancer-vs-ingress-when-should-i-use-what-922f010849e0" target="_blank" rel="noopener">https://medium.com/google-cloud/kubernetes-nodeport-vs-loadbalancer-vs-ingress-when-should-i-use-what-922f010849e0</a></li>
+<li><a href="https://wiki.archlinux.org/index.php/Iptables_(%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87)" target="_blank" rel="noopener">https://wiki.archlinux.org/index.php/Iptables_(%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87)</a></li>
+<li><a href="https://kubernetes.io/docs/concepts/services-networking/service/" target="_blank" rel="noopener">https://kubernetes.io/docs/concepts/services-networking/service/</a></li>
+<li><a href="http://blog.chinaunix.net/uid-23069658-id-3160506.html" target="_blank" rel="noopener">http://blog.chinaunix.net/uid-23069658-id-3160506.html</a></li>
+<li><a href="https://tonydeng.github.io/sdn-handbook/linux/loadbalance.html" target="_blank" rel="noopener">https://tonydeng.github.io/sdn-handbook/linux/loadbalance.html</a></li>
+<li><a href="https://www.josedomingo.org/pledin/2018/11/recursos-de-kubernetes-services/" target="_blank" rel="noopener">https://www.josedomingo.org/pledin/2018/11/recursos-de-kubernetes-services/</a></li>
+</ul>
+</div><div class="tags"><a href="/tags/kubernetes/">kubernetes</a><a href="/tags/ipvs/">ipvs</a><a href="/tags/iptables/">iptables</a><a href="/tags/netfilter/">netfilter</a></div><div class="post-nav"><a class="next" href="/2019/06/01/cgroupv2/">CGROUPS VERSION 2</a></div><div id="container"></div><link rel="stylesheet" type="text/css" href="//unpkg.com/gitalk/dist/gitalk.css?v=0.0.0"><script type="text/javascript" src="//cdn.bootcss.com/blueimp-md5/2.10.0/js/md5.js?v=0.0.0"></script><script type="text/javascript" src="//unpkg.com/gitalk/dist/gitalk.min.js?v=0.0.0"></script><script>var gitalk = new Gitalk({
+  clientID: '86d1945e3a9358946043',
+  clientSecret: '304f48ee3394ae5dab75d19a966506e170d850f6',
+  repo: 'xigang.github.io',
+  owner: 'xigang',
+  admin: ['xigang'],
+  id: md5(location.pathname),
+  distractionFreeMode: false
+})
+gitalk.render('container')
+</script></div></div></div><div class="pure-u-1-4 hidden_mid_and_down"><div id="sidebar"><div class="widget"><form class="search-form" action="//www.baidu.com/baidu" method="get" accept-charset="utf-8" target="_blank"><input type="search" name="word" maxlength="20" placeholder="Search"/><input type="hidden" name="si" value="https://github.com/xigang"/><input name="tn" type="hidden" value="bds"/><input name="cl" type="hidden" value="3"/><input name="ct" type="hidden" value="2097152"/><input name="s" type="hidden" value="on"/></form></div><div class="widget"><div class="widget-title"><i class="fa fa-folder-o"> 分类</i></div><ul class="category-list"><li class="category-list-item"><a class="category-list-link" href="/categories/Linux/">Linux</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/docker/">docker</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/etcd/">etcd</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/kubernetes/">kubernetes</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/microservices/">microservices</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/日志监控/">日志监控</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/机器学习/">机器学习</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-star-o"> 标签</i></div><div class="tagcloud"><a href="/tags/etcd/" style="font-size: 15px;">etcd</a> <a href="/tags/kubernetes/" style="font-size: 15px;">kubernetes</a> <a href="/tags/prometheus/" style="font-size: 15px;">prometheus</a> <a href="/tags/kapacitor/" style="font-size: 15px;">kapacitor</a> <a href="/tags/alertmanager/" style="font-size: 15px;">alertmanager</a> <a href="/tags/bosun/" style="font-size: 15px;">bosun</a> <a href="/tags/Linux/" style="font-size: 15px;">Linux</a> <a href="/tags/cgroup/" style="font-size: 15px;">cgroup</a> <a href="/tags/kernel/" style="font-size: 15px;">kernel</a> <a href="/tags/ceph/" style="font-size: 15px;">ceph</a> <a href="/tags/kubeflow/" style="font-size: 15px;">kubeflow</a> <a href="/tags/scheduler/" style="font-size: 15px;">scheduler</a> <a href="/tags/docker/" style="font-size: 15px;">docker</a> <a href="/tags/microservices/" style="font-size: 15px;">microservices</a> <a href="/tags/ipvs/" style="font-size: 15px;">ipvs</a> <a href="/tags/iptables/" style="font-size: 15px;">iptables</a> <a href="/tags/netfilter/" style="font-size: 15px;">netfilter</a> <a href="/tags/mxnet/" style="font-size: 15px;">mxnet</a> <a href="/tags/tensorflow/" style="font-size: 15px;">tensorflow</a></div></div><div class="widget"><div class="widget-title"><i class="fa fa-file-o"> 最近文章</i></div><ul class="post-list"><li class="post-list-item"><a class="post-list-link" href="/2019/07/21/kubernetes-service/">浅谈Kubernetes Service负载均衡实现机制</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/06/01/cgroupv2/">CGROUPS VERSION 2</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/05/11/bosun/">Prometheus基于bosun框架进行告警</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/04/09/container-resource-metrics/">A Deep Dive Into Kubernetes Metrics - Container Resource Metrics</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/03/15/metrics-servere/">Kubernetes Metrics-Server介绍及源码分析</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/02/17/gang-scheduler/">适合AI场景的调度器 - Gang-Schedule</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/01/30/tensorflow/">Tensorflow结合kubeflow进行分布式训练</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/01/17/mxnet/">MXNet结合kubeflow进行分布式训练</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/12/31/Orphaned-pod/">定位 Orphaned Pod Found - but Volume Paths Are Still Present on Disk 问题</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/12/14/prometheus/">记一次InfoQ采访 <<360容器平台监控实践>></a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-external-link"> 友情链接</i></div><ul></ul><a href="http://gogap.cn/" title="gogap" target="_blank">gogap</a><ul></ul><a href="http://www.0x7c00.net/" title="31744" target="_blank">31744</a><ul></ul><a href="https://www.opsdev.cn/" title="360opsdev" target="_blank">360opsdev</a></div></div></div><div class="pure-u-1 pure-u-md-3-4"><div id="footer">Copyright © 2019 <a href="/." rel="nofollow">xigang's home.</a> Powered by<a rel="nofollow" target="_blank" href="https://hexo.io"> Hexo.</a><a rel="nofollow" target="_blank" href="https://github.com/tufu9441/maupassant-hexo"> Theme</a> by<a rel="nofollow" target="_blank" href="https://github.com/pagecho"> Cho.</a></div></div></div><a class="show" id="rocket" href="#top"></a><script type="text/javascript" src="/js/totop.js?v=0.0.0" async></script><script type="text/javascript" src="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.js" async></script><script type="text/javascript" src="/js/fancybox.js?v=0.0.0" async></script><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.css"><script type="text/javascript" src="/js/codeblock-resizer.js?v=0.0.0"></script><script type="text/javascript" src="/js/smartresize.js?v=0.0.0"></script></div></body></html>
