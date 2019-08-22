@@ -1,0 +1,113 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description"><title>A DNS Refresher | xigang's home</title><link rel="stylesheet" type="text/css" href="/css/style.css?v=0.0.0"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/normalize/8.0.0/normalize.min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/pure-min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/1.0.0/grids-responsive-min.css"><link rel="stylesheet" href="//cdn.bootcss.com/font-awesome/4.7.0/css/font-awesome.min.css"><script type="text/javascript" src="//cdn.bootcss.com/jquery/3.3.1/jquery.min.js"></script><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png"></head><body><div class="body_container"><div id="header"><div class="site-name"><h1 class="hidden">A DNS Refresher</h1><a id="logo" href="/.">xigang's home</a><p class="description">Do it right or don't do it at all</p></div><div id="nav-menu"><a class="current" href="/."><i class="fa fa-home"> 首页</i></a><a href="/archives/"><i class="fa fa-archive"> 归档</i></a><a href="/about/"><i class="fa fa-user"> 关于</i></a><a href="/atom.xml"><i class="fa fa-rss"> 订阅</i></a></div></div><div class="pure-g" id="layout"><div class="pure-u-1 pure-u-md-3-4"><div class="content_container"><div class="post"><h1 class="post-title">A DNS Refresher</h1><div class="post-meta">Aug 22, 2019<span> | </span><span class="category"><a href="/categories/network/">network</a></span><script src="https://dn-lbstatics.qbox.me/busuanzi/2.3/busuanzi.pure.mini.js" async></script><span id="busuanzi_container_page_pv"> | <span id="busuanzi_value_page_pv"></span><span> 阅读</span></span></div><div class="post-content"><p>最近在调研CoreDNS如何为Kubernetes集群内的Service提供<a href="https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/" target="_blank" rel="noopener">DNS</a>服务发现。但是在开始CoreDNS之前，需要对DNS的基础知识有所了解，本篇主要对DNS的学习过程做下记录。</p>
+<h3 id="DNS是什么？"><a href="#DNS是什么？" class="headerlink" title="DNS是什么？"></a>DNS是什么？</h3><p>DNS全名是<code>Domain Name System</code>,通过DNS系统,可以通过domain name查询IP,也可以通过IP反查domain name,除此之外DNS还可以与Mail system结合，提供Mail routing的功能,并且DNS不仅仅是一个域名系统,也是全世界最大的分布式数据库(不同的Zone存储着各自的Zone文件)。</p>
+<p>简单理解就是: 你在浏览器上输入<code>www.google.com</code>域名之后，通过DNS解析之后,会给你Answer一个<code>217.160.0.201</code>地址。然后浏览器通过这个IP地址加端口号去访问最终的服务。</p>
+<h3 id="DNS基本概念"><a href="#DNS基本概念" class="headerlink" title="DNS基本概念"></a>DNS基本概念</h3><h4 id="Domain-Names-and-Namespace"><a href="#Domain-Names-and-Namespace" class="headerlink" title="Domain Names and Namespace"></a>Domain Names and Namespace</h4><ul>
+<li><p>DNS Namespace</p>
+<p>  DNS namespace是一颗倒置的树，并且除了root node节点允许为空外，其它节点不允许空，并且每个node的内容需要有一个最长为63个字符的label。 下图为一个虚构的DNS namespaces:</p>
+</li>
+</ul>
+<div align="left"><br><img src="http://p7.qhimg.com/t01b949933a2ae0f22b.png" width="550" height="350" alt="dns"><br></div>
+
+
+<ul>
+<li><p>Domain Name</p>
+<p>  在一个DNS namespace树中，从叶子节点到根节点，这一条路径的组合被叫做<code>Domian name</code>. 如下图所示是一个<code>www.baz.example.</code>的<code>Domain name</code>。</p>
+</li>
+</ul>
+<div align="left"><br><img src="http://p0.qhimg.com/t015a0c317f7e4516ad.png" width="550" height="350" alt="dns"><br></div>
+
+<p>接下来，让我们看<code>Domain name</code>是如何被分组的，并且如何对其进行管理。</p>
+<h4 id="Domains-Delegation-and-Zones"><a href="#Domains-Delegation-and-Zones" class="headerlink" title="Domains, Delegation and Zones"></a>Domains, Delegation and Zones</h4><ul>
+<li><p>Domain</p>
+<p>  将这个internal分成许多个domain, 每个domain下又会细分为许多个domain,然后这些细分的domain会根据实际的情况在进行更细粒度的划分。并且每一部分domian都会有相应的组织去维护和管理。例如: Google管理<code>google.com</code>， UC Berkeley管理<code>berkeley.edu</code>等。</p>
+<p>下面是一个foo.example Domain的例子:</p>
+  <div align="left"><br>  <img src="http://p8.qhimg.com/t01735f45668ac52791.png" width="400" height="400" alt="dns"><br>  </div>
+</li>
+<li><p>Delegation</p>
+<p>  每个Domain都可因实际的需求再细分成许多sub domain。上层的domain可以将其分出的某一个sub domain的domain name与IP mapping交由另一个组织去管理。这个动作我们称为<code>Delegation</code>.</p>
+<p>  举个例子: 我们可以把<code>berkeley.edu</code>这个domain，分成两个不同的sub domain,一个是<code>cs.berkeley.edu</code>和<code>music.berkeley.edu</code>交由两个不同的学院去各自维护。</p>
+</li>
+<li><p>Zones</p>
+<p>  上面提到的基本每个domain交由一个特定的组织去管理，其实更准确的说应该是每个Zone交由一个name server来负责，所谓的zone就是domian的一部分。下图是一个具体的例子:</p>
+<pre><code>&lt;div align=left&gt;
+</code></pre><p>  <img src="http://p3.qhimg.com/t014078e31d9748ce4a.png" width="400" height="230" alt="dns"><br>  </p>
+</li>
+</ul>
+<h4 id="Resource-Records"><a href="#Resource-Records" class="headerlink" title="Resource Records"></a>Resource Records</h4><p>之前我们简单的说过DNS是一个分布式数据库，但是每个数据库中存储的数据格式是什么样的？</p>
+<p>DNS会在每一个Zone的nameserver上维护一个叫做<code>Zone data file</code>的文件，该文件中保存了该Zone范围内所有的mapping关系。并且该文件中的每一行代表一条<code>resource record</code>。</p>
+<p><code>resource record</code>是DNS存储数据的基本单位。<code>resource record</code>记录的格式如下:</p>
+<figure class="highlight routeros"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">[NAME] [TTL] [CLASS]<span class="built_in"> TYPE </span>RDATA</span><br></pre></td></tr></table></figure>
+<p>下面是一个<code>Zone data file</code>文件的样例：</p>
+ <div align="left"><br>    <img src="http://p2.qhimg.com/t01c600ece91beb15cb.png" width="500" height="600" alt="dns"><br>    </div>
+
+
+<p>每个<code>resource record</code>有不同的<code>Class</code>(但是通常Class为IN)和<code>Type</code>,先简单的介绍下比较通用的<code>resrouce record</code>:</p>
+<ul>
+<li><a href="https://www.cloudflare.com/learning/dns/dns-records/dns-a-record/" target="_blank" rel="noopener">A(IPv4 addresss)</a>: Maps a domain name to a single IPv4 address.</li>
+<li>AAAA (IPv6 address): Maps a domain name to a single IPv6 address.</li>
+<li><a href="https://www.cloudflare.com/learning/dns/dns-records/dns-cname-record/" target="_blank" rel="noopener">CNAME (alias)</a>: Maps a domain name (the alias) to another domain name (the canonical name).</li>
+<li><a href="https://www.cloudflare.com/learning/dns/dns-records/dns-mx-record/" target="_blank" rel="noopener">MX (mail exchanger)</a>: Names a mail exchanger (mail server) for an email destination.</li>
+<li><a href="https://www.cloudflare.com/learning/dns/dns-records/dns-ns-record/" target="_blank" rel="noopener">NS (name server)</a>: Names a name server (or DNS server) for a zone.</li>
+<li><a href="https://www.cloudflare.com/learning/dns/dns-records/dns-ptr-record/" target="_blank" rel="noopener">PTR (pointer)</a>: Maps an IP address back to a domain name.</li>
+<li><a href="https://www.cloudflare.com/learning/dns/dns-records/dns-srv-record/" target="_blank" rel="noopener">SRV record</a> - Specifies a port for specific services.</li>
+<li><a href="https://www.cloudflare.com/learning/dns/dns-records/dns-soa-record/" target="_blank" rel="noopener">SOA (start of authority)</a>: Provides parameters for a zone.</li>
+</ul>
+<h4 id="DNS-Servers"><a href="#DNS-Servers" class="headerlink" title="DNS Servers"></a>DNS Servers</h4><p>DNS server主要负责两方面：</p>
+<ul>
+<li>对于一个domain name的query动作进行Answer。</li>
+<li>对于一个domain name的query去其它的DNS server query。</li>
+</ul>
+<div align="left"><br><img src="http://p6.qhimg.com/t010c4dc261c8b71025.png" width="600" height="400" alt="dns"><br></div>
+
+<p>从上面这张图可以看到，每个Zone内通常存在两个DNS server,一个叫<code>Promary DNS server</code>，另一个叫做<code>Secondary DNS server</code>。这种关系其实就是master/salve的关系,<code>Primary DNS Server</code>会通过<code>zone transfer</code>机制去向<code>Secondary DNS server</code>同步<code>zone data file</code>记录,当其中一个DNS server挂掉之后，不会导致这个Zone不能进行domain name的解析工作。</p>
+<p>其中，每个Zone的DNS server都会维护一个叫做<code>zone data file</code>的文件，该文件中记录了该Zone的所有domain name的记录数据，DNS server会加载<code>zone data file</code>的记录用于DNS解析工作。并且DNS server也可以通过<code>zone transfer</code>的机制，加载其它DNS server的<code>zone data file</code>。</p>
+<h3 id="DNS是如何工作？"><a href="#DNS是如何工作？" class="headerlink" title="DNS是如何工作？"></a>DNS是如何工作？</h3><p>为了更好的理解DNS对domain的解析流程，首先介绍下DNS服务器的种类：</p>
+<h4 id="What-is-a-DNS-recursive-resolver"><a href="#What-is-a-DNS-recursive-resolver" class="headerlink" title="What is a DNS recursive resolver?"></a>What is a DNS recursive resolver?</h4><div align="left"><br><img src="http://p7.qhimg.com/t01988c3bca810d9362.png" width="600" height="400" alt="dns"><br></div>
+
+<p>从上面这张图，可以看到<code>recursive resolver</code>在DNS解析过程的位置是在client和DNS nameserver之间，当client发起DNS查询请求时，首先会经过<code>recursive resolver</code>,如果在<br><code>recursive resolver</code>维护的cache中已经有请求的记录则直接返回给client，否则<code>recursive resolver</code>会依次向<code>root nameserver</code>,<code>TLD nameserver</code>和<code>authoritative nameserver</code>进行DNS的请求查询，然后将查询到的数据响应给请求的客户端，<br>并同时缓存这部分数据到本地的缓存中，用于提高下次查询的效率。</p>
+<h4 id="What-is-a-DNS-root-nameserver"><a href="#What-is-a-DNS-root-nameserver" class="headerlink" title="What is a DNS root nameserver?"></a>What is a DNS root nameserver?</h4><div align="left"><br><img src="http://p4.qhimg.com/t0151a7238dea56b281.png" width="600" height="400" alt="dns"><br></div>
+
+<p>每个<code>recursive resolver</code>都知道13个<code>root nameserver</code>的地址(因为全世界就只有13个root nameserver)。<code>recursive resolver</code>首先会给这13个root nameserver中的一个发送查询请求，root nameserver接收到查询请求之后，会给<code>recursive resolver</code>返回相关的<code>TLD namenameserver</code>的地址(TLD是top-level domain的缩写顶级域名)。类似:(.com, .net, .edu等)</p>
+<p>注意: <code>这里说的13个root nameserver，并不是只有13台root nameserver。而是表示13种类型的root namserver</code>。</p>
+<h4 id="What-is-a-TLD-nameserver"><a href="#What-is-a-TLD-nameserver" class="headerlink" title="What is a TLD nameserver?"></a>What is a TLD nameserver?</h4><div align="left"><br><img src="http://p2.qhimg.com/t01136362b29e98e8c8.png" width="600" height="400" alt="dns"><br></div>
+
+<p>TLD nameserver维护了所有的顶级域名信息，例如:.com, .net, .edu等。例如你想要访问<code>google.com</code>, 首先会去访问<code>root nameserver</code>,然后<code>recursive resolver</code>接收到响应之后会去查询<code>.com</code>的TLD nameserver。 之后TLD nameserver会响应相关的<code>authoritative nameserver</code>。</p>
+<ul>
+<li>Generic top-level domains: 通用的顶级域名。比较有名的包括: .com, .org, .net, .edu等。</li>
+<li>Country code top-level domains: 区域域名，例如: .uk, .cn, .us等</li>
+</ul>
+<h4 id="What-is-an-authoritative-nameserver"><a href="#What-is-an-authoritative-nameserver" class="headerlink" title="What is an authoritative nameserver?"></a>What is an authoritative nameserver?</h4><div align="left"><br><img src="http://p3.qhimg.com/t0125f13bb820315a4a.png" width="600" height="400" alt="dns"><br></div>
+
+<p><code>authoritative nameserver</code>简而言之就是直接给你的查询返回Answer的服务器。例如: 你search <code>googlec.com</code>, 则当<code>recursive resolver</code>解析到<code>authoritative nameserver</code>之后，就会直接给你返回google.com domain的IP地址:<code>217.160.0.201</code>。</p>
+<p>上面就是DNS server的几种类型，知道了DNS Server的类型之后，接下来让我们看下DNS的整个解析流程:</p>
+<h4 id="The-8-steps-in-a-DNS-lookup"><a href="#The-8-steps-in-a-DNS-lookup" class="headerlink" title="The 8 steps in a DNS lookup:"></a>The 8 steps in a DNS lookup:</h4><div align="left"><br><img src="http://p4.qhimg.com/t015cd3d0675da17a8c.png" width="600" height="400" alt="dns"><br></div>
+
+
+
+
+
+
+<p>1.用户在web浏览器上输入: <code>example.com</code>之后，<code>DNS recursive resolver</code>服务器接收到DNS请求。<br>2.<code>resolver</code>首先向<code>root nameserver</code>进行查询。<br>3.<code>root nameserver</code>会响应给<code>resolver</code> 顶级域名<code>TLD DNS Server</code>的地址，在我们的例子中，由于访问的是<code>example.com</code>,所以会给<code>resolver</code>返回<code>.com</code> TLD。<br>4.<code>resolver</code>之后会向<code>.com</code> TLD发起查询请求。<br>5.TLD DNS server会给<code>resolver</code>响应包含<code>example.com</code> domain name的nameserver地址。<br>6.接着, <code>recursive resolver</code>会向domain nameserver发送query查询动作。<br>7.最终, domain nameserver会返回<code>example.com</code>的IP地址给<code>resolver</code>。<br>8.<code>DNS resolver</code>会把解析出来的IP响应给web浏览器。<br>9.浏览器发起一个HTTP的请求到目标IP地址。<br>10.请求的服务端将请求的数据响应给浏览器。</p>
+<p>上面就是在DNS的一个完成的解析过程。</p>
+<h3 id="DNS-工具"><a href="#DNS-工具" class="headerlink" title="DNS 工具"></a>DNS 工具</h3><ul>
+<li>host </li>
+<li>nslookup</li>
+<li>dig</li>
+</ul>
+<h3 id="参考"><a href="#参考" class="headerlink" title="参考"></a>参考</h3><ul>
+<li><a href="https://learning.oreilly.com/library/view/learning-coredns/9781492047957/ch02.html" target="_blank" rel="noopener">https://learning.oreilly.com/library/view/learning-coredns/9781492047957/ch02.html</a></li>
+<li><a href="https://www.cloudflare.com/learning/dns/what-is-dns/" target="_blank" rel="noopener">https://www.cloudflare.com/learning/dns/what-is-dns/</a></li>
+<li><a href="http://www.ruanyifeng.com/blog/2016/06/dns.html" target="_blank" rel="noopener">http://www.ruanyifeng.com/blog/2016/06/dns.html</a></li>
+<li><a href="http://faculty.ndhu.edu.tw/~comput/computer_c/training/hbc0122/dns-0.htm" target="_blank" rel="noopener">http://faculty.ndhu.edu.tw/~comput/computer_c/training/hbc0122/dns-0.htm</a> </li>
+</ul>
+</div><div class="tags"><a href="/tags/dns/">dns</a><a href="/tags/coredns/">coredns</a><a href="/tags/network/">network</a></div><div class="post-nav"><a class="next" href="/2019/07/28/kube-proxy-source-code/">Kube-Proxy  IPVS模式源码分析</a></div><div id="container"></div><link rel="stylesheet" type="text/css" href="//unpkg.com/gitalk/dist/gitalk.css?v=0.0.0"><script type="text/javascript" src="//cdn.bootcss.com/blueimp-md5/2.10.0/js/md5.js?v=0.0.0"></script><script type="text/javascript" src="//unpkg.com/gitalk/dist/gitalk.min.js?v=0.0.0"></script><script>var gitalk = new Gitalk({
+  clientID: '86d1945e3a9358946043',
+  clientSecret: '304f48ee3394ae5dab75d19a966506e170d850f6',
+  repo: 'xigang.github.io',
+  owner: 'xigang',
+  admin: ['xigang'],
+  id: md5(location.pathname),
+  distractionFreeMode: false
+})
+gitalk.render('container')
+</script></div></div></div><div class="pure-u-1-4 hidden_mid_and_down"><div id="sidebar"><div class="widget"><form class="search-form" action="//www.baidu.com/baidu" method="get" accept-charset="utf-8" target="_blank"><input type="search" name="word" maxlength="20" placeholder="Search"/><input type="hidden" name="si" value="https://github.com/xigang"/><input name="tn" type="hidden" value="bds"/><input name="cl" type="hidden" value="3"/><input name="ct" type="hidden" value="2097152"/><input name="s" type="hidden" value="on"/></form></div><div class="widget"><div class="widget-title"><i class="fa fa-folder-o"> 分类</i></div><ul class="category-list"><li class="category-list-item"><a class="category-list-link" href="/categories/Linux/">Linux</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/docker/">docker</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/etcd/">etcd</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/kubernetes/">kubernetes</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/microservices/">microservices</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/network/">network</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/日志监控/">日志监控</a></li><li class="category-list-item"><a class="category-list-link" href="/categories/机器学习/">机器学习</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-star-o"> 标签</i></div><div class="tagcloud"><a href="/tags/network/" style="font-size: 15px;">network</a> <a href="/tags/kubernetes/" style="font-size: 15px;">kubernetes</a> <a href="/tags/prometheus/" style="font-size: 15px;">prometheus</a> <a href="/tags/kapacitor/" style="font-size: 15px;">kapacitor</a> <a href="/tags/alertmanager/" style="font-size: 15px;">alertmanager</a> <a href="/tags/bosun/" style="font-size: 15px;">bosun</a> <a href="/tags/Linux/" style="font-size: 15px;">Linux</a> <a href="/tags/cgroup/" style="font-size: 15px;">cgroup</a> <a href="/tags/kernel/" style="font-size: 15px;">kernel</a> <a href="/tags/dns/" style="font-size: 15px;">dns</a> <a href="/tags/coredns/" style="font-size: 15px;">coredns</a> <a href="/tags/ceph/" style="font-size: 15px;">ceph</a> <a href="/tags/kubeflow/" style="font-size: 15px;">kubeflow</a> <a href="/tags/scheduler/" style="font-size: 15px;">scheduler</a> <a href="/tags/etcd/" style="font-size: 15px;">etcd</a> <a href="/tags/docker/" style="font-size: 15px;">docker</a> <a href="/tags/microservices/" style="font-size: 15px;">microservices</a> <a href="/tags/ipvs/" style="font-size: 15px;">ipvs</a> <a href="/tags/iptables/" style="font-size: 15px;">iptables</a> <a href="/tags/netfilter/" style="font-size: 15px;">netfilter</a> <a href="/tags/mxnet/" style="font-size: 15px;">mxnet</a> <a href="/tags/tensorflow/" style="font-size: 15px;">tensorflow</a></div></div><div class="widget"><div class="widget-title"><i class="fa fa-file-o"> 最近文章</i></div><ul class="post-list"><li class="post-list-item"><a class="post-list-link" href="/2019/08/22/dns/">A DNS Refresher</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/07/28/kube-proxy-source-code/">Kube-Proxy  IPVS模式源码分析</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/07/21/kubernetes-service/">浅谈Kubernetes Service负载均衡实现机制</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/06/01/cgroupv2/">CGROUPS VERSION 2</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/05/11/bosun/">Prometheus基于bosun框架进行告警</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/04/09/container-resource-metrics/">A Deep Dive Into Kubernetes Metrics - Container Resource Metrics</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/03/15/metrics-servere/">Kubernetes Metrics-Server介绍及源码分析</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/02/17/gang-scheduler/">适合AI场景的调度器 - Gang-Schedule</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/01/30/tensorflow/">Tensorflow结合kubeflow进行分布式训练</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/01/17/mxnet/">MXNet结合kubeflow进行分布式训练</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-external-link"> 友情链接</i></div><ul></ul><a href="http://gogap.cn/" title="gogap" target="_blank">gogap</a><ul></ul><a href="http://www.0x7c00.net/" title="31744" target="_blank">31744</a><ul></ul><a href="https://www.opsdev.cn/" title="360opsdev" target="_blank">360opsdev</a></div></div></div><div class="pure-u-1 pure-u-md-3-4"><div id="footer">Copyright © 2019 <a href="/." rel="nofollow">xigang's home.</a> Powered by<a rel="nofollow" target="_blank" href="https://hexo.io"> Hexo.</a><a rel="nofollow" target="_blank" href="https://github.com/tufu9441/maupassant-hexo"> Theme</a> by<a rel="nofollow" target="_blank" href="https://github.com/pagecho"> Cho.</a></div></div></div><a class="show" id="rocket" href="#top"></a><script type="text/javascript" src="/js/totop.js?v=0.0.0" async></script><script type="text/javascript" src="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.js" async></script><script type="text/javascript" src="/js/fancybox.js?v=0.0.0" async></script><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/fancybox/3.3.5/jquery.fancybox.min.css"><script type="text/javascript" src="/js/codeblock-resizer.js?v=0.0.0"></script><script type="text/javascript" src="/js/smartresize.js?v=0.0.0"></script></div></body></html>
